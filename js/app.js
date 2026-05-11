@@ -107,13 +107,28 @@
     .attribution({ position: "bottomleft", prefix: false })
     .addTo(map);
 
-  const topoLayer = L.tileLayer(
+  // Hillshade base — clean shaded relief with no baked-in labels or elevations.
+  // OpenTopoMap (used previously) burns OSM place names and meter elevations
+  // into the tile image, which collide with our own peak labels and force the
+  // user's unit preference to be ignored.
+  const hillshadeLayer = L.tileLayer(
+    "https://server.arcgisonline.com/ArcGIS/rest/services/Elevation/World_Hillshade/MapServer/tile/{z}/{y}/{x}",
+    {
+      maxZoom: 18,
+      attribution:
+        'Hillshade tiles © <a href="https://www.esri.com/">Esri</a> — Source: Esri, USGS, NOAA',
+    }
+  );
+  // Optional contour overlay. Its opacity is user-controllable so the contour
+  // density (and the baked-in OSM labels that come with it) can be dialed back.
+  const contourLayer = L.tileLayer(
     "https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png",
     {
       maxZoom: 17,
       subdomains: "abc",
+      opacity: 0.3,
       attribution:
-        '© <a href="https://opentopomap.org/">OpenTopoMap</a> ' +
+        'Contours © <a href="https://opentopomap.org/">OpenTopoMap</a> ' +
         '(<a href="https://creativecommons.org/licenses/by-sa/3.0/">CC-BY-SA</a>), ' +
         'data © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
     }
@@ -127,7 +142,7 @@
         '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
     }
   );
-  topoLayer.addTo(map);
+  hillshadeLayer.addTo(map);
 
   const peaksGroup = L.layerGroup().addTo(map);
 
@@ -303,13 +318,15 @@
       peak.ele != null
         ? '<span class="pin__ele">' + formatElev(peak.ele) + "</span>"
         : "";
-    const label =
-      state.display.showLabels || state.display.showElev
-        ? '<span class="pin__label">' +
-          (state.display.showLabels ? nameHtml : "") +
-          (state.display.showElev ? eleHtml : "") +
-          "</span>"
-        : "";
+    const showLabel =
+      (state.display.showLabels || state.display.showElev) &&
+      !peak._labelHidden;
+    const label = showLabel
+      ? '<span class="pin__label">' +
+        (state.display.showLabels ? nameHtml : "") +
+        (state.display.showElev ? eleHtml : "") +
+        "</span>"
+      : "";
 
     const html =
       '<div class="pin ' + (dimmed ? "pin--dim" : "") + '">' +
@@ -331,10 +348,35 @@
     });
   }
 
+  // Greedy label de-cluttering: walk the prominence-sorted list and hide the
+  // label of any pin whose projected pixel position is too close to an already-
+  // shown one. The triangle marker stays so the user still sees every peak.
+  function suppressOverlappingLabels(peaks) {
+    const zoom = map.getZoom();
+    // Rough label footprint; tuned for the current pin style (.pin__label is
+    // ~75–90px wide depending on the name, ~28px tall with name + elevation).
+    const minSepX = 78;
+    const minSepY = 26;
+    const placed = [];
+    peaks.forEach((p) => {
+      const pt = map.project([p.lat, p.lng], zoom);
+      const collides = placed.some((sp) => {
+        const spt = map.project([sp.lat, sp.lng], zoom);
+        return (
+          Math.abs(pt.x - spt.x) < minSepX &&
+          Math.abs(pt.y - spt.y) < minSepY
+        );
+      });
+      p._labelHidden = collides;
+      if (!collides) placed.push(p);
+    });
+  }
+
   function render() {
     peaksGroup.clearLayers();
 
     const shown = visiblePeaks();
+    suppressOverlappingLabels(shown);
     const shownIds = new Set(shown.map((p) => p.id));
 
     // Always render shown peaks fully, render others dimmed so the map keeps
@@ -587,8 +629,12 @@
 
   function wireStyle() {
     $("opt-topo").addEventListener("change", (e) => {
-      if (e.target.checked) topoLayer.addTo(map);
-      else map.removeLayer(topoLayer);
+      if (e.target.checked) hillshadeLayer.addTo(map);
+      else map.removeLayer(hillshadeLayer);
+    });
+    $("opt-contours").addEventListener("change", (e) => {
+      if (e.target.checked) contourLayer.addTo(map);
+      else map.removeLayer(contourLayer);
     });
     $("opt-osm").addEventListener("change", (e) => {
       if (e.target.checked) osmLayer.addTo(map);
@@ -600,6 +646,13 @@
     });
     $("opt-border").addEventListener("change", (e) => {
       $("poster").classList.toggle("poster--noborder", !e.target.checked);
+    });
+
+    const contourSlider = $("opt-contour-density");
+    contourSlider.addEventListener("input", () => {
+      const v = +contourSlider.value;
+      contourLayer.setOpacity(v / 100);
+      $("contour-readout").textContent = v + "%";
     });
 
     const tilePane = map.getPanes().tilePane;
@@ -757,7 +810,12 @@
     updateFooter();
     fetchPeaksDebounced();
   });
-  map.on("zoomend", updateFooter);
+  map.on("zoomend", () => {
+    updateFooter();
+    // Pixel separation between peaks changes with zoom, so the collision
+    // map has to be rebuilt to keep labels readable.
+    render();
+  });
   window.addEventListener("resize", () => map.invalidateSize());
 
   // Initial run.

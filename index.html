@@ -196,7 +196,28 @@
             <div class="panel__body">
               <label class="check">
                 <input type="checkbox" id="opt-topo" checked />
-                <span>Contours &amp; hillshade</span>
+                <span>Hillshade base</span>
+              </label>
+              <label class="check">
+                <input type="checkbox" id="opt-contours" />
+                <span>Contour overlay</span>
+              </label>
+              <label class="field">
+                <span class="field__label">
+                  Contour density
+                  <span class="field__value" id="contour-readout">30%</span>
+                </span>
+                <input
+                  type="range"
+                  id="opt-contour-density"
+                  min="0"
+                  max="100"
+                  value="30"
+                />
+                <p class="field__hint">
+                  Higher = denser lines and stronger basemap text. Lower
+                  values keep the poster clean.
+                </p>
               </label>
               <label class="check">
                 <input type="checkbox" id="opt-osm" />
