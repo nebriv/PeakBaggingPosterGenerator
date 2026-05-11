@@ -324,6 +324,32 @@
             <div class="panel__body panel__body--list">
               <ul class="peaklist" id="peaklist"></ul>
             </div>
+            <div class="panel__body">
+              <button type="button" class="btn add-peak-btn" id="add-peak-btn">
+                + Add a peak manually
+              </button>
+              <p class="field__hint">
+                Drops a pin where you click on the map. Useful for peaks
+                OSM is missing or registers under a different name. Saved
+                locally; persists across reloads.
+              </p>
+            </div>
+            <div
+              class="panel__sub"
+              id="excluded-wrap"
+              style="display: none"
+            >
+              <details class="panel__sub__details">
+                <summary class="panel__sub__summary">
+                  Excluded
+                  <span class="badge" id="badge-excluded">0</span>
+                </summary>
+                <ul
+                  class="peaklist peaklist--excluded"
+                  id="excluded-peaklist"
+                ></ul>
+              </details>
+            </div>
           </details>
         </aside>
 

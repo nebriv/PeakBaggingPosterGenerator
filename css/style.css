@@ -545,6 +545,167 @@ input[type="range"]::-moz-range-thumb {
   font-family: var(--font-sans);
   text-align: center;
 }
+.peaklist__tag {
+  display: inline-block;
+  margin-right: 5px;
+  padding: 0 4px;
+  font-size: 10px;
+  border-radius: 2px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  line-height: 1.4;
+}
+.peaklist__item--custom .peaklist__name {
+  color: var(--accent);
+}
+.peaklist__hide,
+.peaklist__restore {
+  margin-left: 4px;
+  padding: 0 6px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-mute);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.1s, color 0.1s;
+  flex-shrink: 0;
+}
+.peaklist__item:hover .peaklist__hide,
+.peaklist__item:hover .peaklist__restore {
+  opacity: 1;
+}
+.peaklist__hide:hover {
+  color: var(--warn);
+}
+.peaklist__restore:hover {
+  color: var(--ok);
+}
+
+/* "+ Add a peak" toggle */
+.add-peak-btn {
+  width: 100%;
+  justify-content: center;
+}
+.add-peak-btn--active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* Excluded subsection nested inside Visible Peaks */
+.panel__sub {
+  border-top: 1px solid var(--rule-soft);
+}
+.panel__sub__details {
+  padding: 0;
+}
+.panel__sub__summary {
+  list-style: none;
+  cursor: pointer;
+  padding: 9px 14px;
+  font-size: 10px;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.panel__sub__summary::-webkit-details-marker {
+  display: none;
+}
+.panel__sub__summary::after {
+  content: "+";
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-mute);
+}
+.panel__sub__details[open] > .panel__sub__summary::after {
+  content: "−";
+  color: var(--accent);
+}
+
+/* Click-to-place cursor for "Add a peak" */
+.map--adding-peak,
+.map--adding-peak .leaflet-grab,
+.map--adding-peak .leaflet-interactive {
+  cursor: crosshair !important;
+}
+
+/* Add-peak popup form */
+.leaflet-popup-content-wrapper {
+  background: var(--bg-panel-elev) !important;
+  color: var(--text) !important;
+  border: 1px solid var(--rule) !important;
+  border-radius: 4px !important;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4) !important;
+}
+.leaflet-popup-tip {
+  background: var(--bg-panel-elev) !important;
+  border: 1px solid var(--rule) !important;
+}
+.leaflet-popup-content {
+  margin: 10px 12px !important;
+  font-family: var(--font-sans) !important;
+}
+.addpeak {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 180px;
+}
+.addpeak input {
+  background: var(--bg-input);
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  padding: 6px 8px;
+  font-size: 12px;
+  color: var(--text);
+  font-family: inherit;
+  width: 100%;
+}
+.addpeak input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.addpeak__row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.addpeak__row input {
+  flex: 1;
+}
+.addpeak__unit {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.addpeak__btn {
+  flex: 1;
+  padding: 6px 10px;
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  background: var(--bg-input);
+  color: var(--text);
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+}
+.addpeak__btn:hover {
+  border-color: var(--text-dim);
+}
+.addpeak__btn--save {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #161616;
+  font-weight: 600;
+}
+.addpeak__btn--save:hover {
+  background: #ffdf8f;
+}
 
 /* --- Stage / poster ------------------------------------------ */
 
