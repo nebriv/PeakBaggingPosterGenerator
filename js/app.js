@@ -119,17 +119,18 @@
         'Hillshade tiles © <a href="https://www.esri.com/">Esri</a> — Source: Esri, USGS, NOAA',
     }
   );
-  // Optional contour overlay. Its opacity is user-controllable so the contour
-  // density (and the baked-in OSM labels that come with it) can be dialed back.
+  // Contour overlay: Stamen Terrain Lines (via Stadia). This layer is purely
+  // topographic lines — no place names, no elevations baked into the tile —
+  // which is exactly what the poster wants. Opacity is user-controllable so
+  // the density of lines can be dialed up or down.
   const contourLayer = L.tileLayer(
-    "https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png",
+    "https://tiles.stadiamaps.com/tiles/stamen_terrain_lines/{z}/{x}/{y}.png",
     {
-      maxZoom: 17,
-      subdomains: "abc",
-      opacity: 0.3,
+      maxZoom: 18,
+      opacity: 0.6,
       attribution:
-        'Contours © <a href="https://opentopomap.org/">OpenTopoMap</a> ' +
-        '(<a href="https://creativecommons.org/licenses/by-sa/3.0/">CC-BY-SA</a>), ' +
+        'Contours © <a href="https://stadiamaps.com/">Stadia Maps</a>, ' +
+        '<a href="https://stamen.com/">Stamen Design</a>; ' +
         'data © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
     }
   );
@@ -143,6 +144,7 @@
     }
   );
   hillshadeLayer.addTo(map);
+  contourLayer.addTo(map);
 
   const peaksGroup = L.layerGroup().addTo(map);
 
