@@ -1,91 +1,59 @@
-/* ADK 46 Poster Generator
+/* Peak Bagging Poster Generator
  *
- * Renders an artistic, B&W-styled topo map of the Adirondack 46 High Peaks
- * using Leaflet with OpenTopoMap tiles. All filtering and styling happens
- * client-side so the site is a fully static GitHub Pages app.
+ * Dynamic, region-agnostic topographic poster designer. Peaks are fetched
+ * live from OpenStreetMap via the Overpass API; the user pans/zooms the map
+ * to any region (ADK 46, Catskill 3500, Whites, 14ers, Alps, etc.) and the
+ * peaks update. Nothing is hardcoded.
+ *
+ * Output style is intentionally clean and high-contrast so the poster can
+ * be framed and (e.g.) trails highlighted on the glass.
  */
 (function () {
   "use strict";
 
-  const peaks = window.ADK_PEAKS;
+  // ---------------------------------------------------------------
+  // Constants & state
+  // ---------------------------------------------------------------
 
-  // --- Map setup ---------------------------------------------------------
+  const OVERPASS_ENDPOINTS = [
+    "https://overpass-api.de/api/interpreter",
+    "https://overpass.kumi.systems/api/interpreter",
+    "https://overpass.private.coffee/api/interpreter",
+  ];
+  const NOMINATIM_URL = "https://nominatim.openstreetmap.org/search";
 
-  const map = L.map("map", {
-    zoomControl: true,
-    attributionControl: false,
-    preferCanvas: true,
-    // Generous bounds so users can pan into adjacent terrain if they want.
-    maxBounds: [
-      [43.5, -75.5],
-      [44.8, -73.0],
-    ],
-    maxBoundsViscosity: 0.8,
-  });
+  const M_TO_FT = 3.28084;
 
-  // OpenTopoMap has contours + hillshade baked in. CSS filters give us
-  // the B&W cartocuts-style look without needing a vector tile server.
-  const topoLayer = L.tileLayer(
-    "https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png",
-    {
-      maxZoom: 17,
-      subdomains: "abc",
-      attribution:
-        'Map: &copy; <a href="https://opentopomap.org/">OpenTopoMap</a> ' +
-        '(<a href="https://creativecommons.org/licenses/by-sa/3.0/">CC-BY-SA</a>), ' +
-        'data &copy; <a href="https://www.openstreetmap.org/copyright">OSM</a>, ' +
-        'SRTM | Style: &copy; <a href="https://opentopomap.org/">OpenTopoMap</a>',
-    }
-  );
+  const state = {
+    unit: "ft", // "ft" | "m"
+    peaks: [], // current rendered set
+    cache: new Map(), // bboxKey -> peak[]
+    fetchSeq: 0, // race-condition guard
+    inflight: null, // AbortController
+    filters: {
+      eleMin: 0,
+      eleMax: 9000,
+      eleMinManual: false,
+      eleMaxManual: false,
+      requireName: false,
+      requireEle: true,
+      topN: 0,
+    },
+    display: {
+      showLabels: true,
+      showElev: true,
+      border: true,
+    },
+  };
 
-  // Optional OSM overlay for roads/towns/water labels.
-  const osmOverlay = L.tileLayer(
-    "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
-    {
-      maxZoom: 19,
-      opacity: 0.35,
-      attribution:
-        '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
-    }
-  );
+  // ---------------------------------------------------------------
+  // DOM helpers
+  // ---------------------------------------------------------------
 
-  topoLayer.addTo(map);
+  const $ = (id) => document.getElementById(id);
 
-  const peakMarkers = new Map();
-  const peaksLayer = L.layerGroup().addTo(map);
-
-  // Fit to the peaks once on load so users see all 46 immediately.
-  const allBounds = L.latLngBounds(peaks.map((p) => [p.lat, p.lng]));
-  map.fitBounds(allBounds, { padding: [40, 40] });
-
-  // --- Peak markers ------------------------------------------------------
-
-  function buildMarker(peak) {
-    const html =
-      '<div class="peak-marker">' +
-      '<span class="peak-marker__triangle" aria-hidden="true"></span>' +
-      '<span class="peak-marker__label">' +
-      '<span class="peak-marker__name">' + escapeHtml(peak.name) + "</span>" +
-      '<span class="peak-marker__elev">' + peak.elevation + " ft</span>" +
-      "</span>" +
-      "</div>";
-    const icon = L.divIcon({
-      className: "peak-marker-wrap",
-      html: html,
-      iconSize: [0, 0],
-      iconAnchor: [0, 0],
-    });
-    return L.marker([peak.lat, peak.lng], {
-      icon: icon,
-      keyboard: false,
-      interactive: false,
-      // Higher peaks render above lower ones so the biggest names win in overlaps.
-      zIndexOffset: peak.elevation,
-    });
-  }
-
-  function escapeHtml(str) {
-    return str.replace(/[&<>"']/g, (c) => ({
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, (c) => ({
       "&": "&amp;",
       "<": "&lt;",
       ">": "&gt;",
@@ -94,165 +62,706 @@
     }[c]));
   }
 
-  peaks.forEach((peak) => {
-    const marker = buildMarker(peak);
-    marker.addTo(peaksLayer);
-    peakMarkers.set(peak, marker);
+  function debounce(fn, ms) {
+    let t = null;
+    return function (...args) {
+      clearTimeout(t);
+      t = setTimeout(() => fn.apply(this, args), ms);
+    };
+  }
+
+  function setStatus(text, kind) {
+    const chip = $("chip-status");
+    chip.textContent = text;
+    chip.dataset.kind = kind || "ready";
+  }
+
+  // ---------------------------------------------------------------
+  // Unit conversion
+  // ---------------------------------------------------------------
+
+  function metersToUnit(m) {
+    if (m == null) return null;
+    return state.unit === "ft" ? m * M_TO_FT : m;
+  }
+  function unitToMeters(v) {
+    return state.unit === "ft" ? v / M_TO_FT : v;
+  }
+  function formatElev(m) {
+    if (m == null) return "—";
+    const v = metersToUnit(m);
+    return Math.round(v).toLocaleString() + " " + state.unit;
+  }
+
+  // ---------------------------------------------------------------
+  // Map setup
+  // ---------------------------------------------------------------
+
+  const map = L.map("map", {
+    zoomControl: false,
+    attributionControl: false,
+    preferCanvas: true,
   });
+  L.control.zoom({ position: "topleft" }).addTo(map);
+  map.attributionControl = L.control
+    .attribution({ position: "bottomleft", prefix: false })
+    .addTo(map);
 
-  // --- Controls ----------------------------------------------------------
+  const topoLayer = L.tileLayer(
+    "https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png",
+    {
+      maxZoom: 17,
+      subdomains: "abc",
+      attribution:
+        '© <a href="https://opentopomap.org/">OpenTopoMap</a> ' +
+        '(<a href="https://creativecommons.org/licenses/by-sa/3.0/">CC-BY-SA</a>), ' +
+        'data © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+    }
+  );
+  const osmLayer = L.tileLayer(
+    "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+    {
+      maxZoom: 19,
+      opacity: 0.35,
+      attribution:
+        '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+    }
+  );
+  topoLayer.addTo(map);
 
-  const $ = (id) => document.getElementById(id);
+  const peaksGroup = L.layerGroup().addTo(map);
 
-  const titleInput = $("poster-title");
-  const subtitleInput = $("poster-subtitle");
-  const titleDisplay = $("title-display");
-  const subtitleDisplay = $("subtitle-display");
+  // Default to ADK High Peaks region — it's where the user is hiking — but
+  // nothing else assumes that. The Region presets jump elsewhere instantly.
+  map.fitBounds([
+    [43.95, -74.30],
+    [44.45, -73.65],
+  ]);
 
-  titleInput.addEventListener("input", () => {
-    titleDisplay.textContent = titleInput.value;
-  });
-  subtitleInput.addEventListener("input", () => {
-    subtitleDisplay.textContent = subtitleInput.value;
-    subtitleDisplay.style.display = subtitleInput.value ? "" : "none";
-  });
+  // ---------------------------------------------------------------
+  // Overpass: fetch peaks for current map view
+  // ---------------------------------------------------------------
 
-  // Elevation range. Outside-range peaks are dimmed rather than hidden so the
-  // map keeps its overall composition (this is what the user described —
-  // highlight peaks they want, keep the others visible).
-  const elevMin = $("elev-min");
-  const elevMax = $("elev-max");
-  const elevMinVal = $("elev-min-val");
-  const elevMaxVal = $("elev-max-val");
+  function bboxKey(bounds, zoom) {
+    return [
+      bounds.getSouth().toFixed(3),
+      bounds.getWest().toFixed(3),
+      bounds.getNorth().toFixed(3),
+      bounds.getEast().toFixed(3),
+      zoom,
+    ].join("/");
+  }
 
-  function applyElevationFilter() {
-    let lo = +elevMin.value;
-    let hi = +elevMax.value;
-    if (lo > hi) {
-      // Keep handles from crossing.
-      if (this === elevMin) {
-        elevMax.value = lo;
-        hi = lo;
-      } else {
-        elevMin.value = hi;
-        lo = hi;
+  function parseElev(raw) {
+    if (raw == null) return null;
+    const s = String(raw).trim();
+    const m = s.match(/^(-?\d+(?:\.\d+)?)/);
+    if (!m) return null;
+    let v = parseFloat(m[1]);
+    if (Number.isNaN(v)) return null;
+    // OSM standard is meters as a plain number. Some entries include units —
+    // be defensive about feet so we don't end up showing 16,000 ft summits
+    // for a peak that's really 1600 m.
+    if (/(?:ft|feet|')\s*$/i.test(s)) v = v / M_TO_FT;
+    return v;
+  }
+
+  function parseOSMElement(el) {
+    if (!el || !el.tags) return null;
+    const tags = el.tags;
+    const lat = el.lat != null ? el.lat : el.center && el.center.lat;
+    const lon = el.lon != null ? el.lon : el.center && el.center.lon;
+    if (lat == null || lon == null) return null;
+    return {
+      id: el.type + "/" + el.id,
+      lat: lat,
+      lng: lon,
+      name: tags.name || tags["name:en"] || null,
+      ele: parseElev(tags.ele),
+      kind: tags.natural || "peak",
+      wiki: tags.wikipedia || tags.wikidata || null,
+    };
+  }
+
+  async function overpassFetch(query, signal) {
+    let lastErr = null;
+    for (const url of OVERPASS_ENDPOINTS) {
+      try {
+        const res = await fetch(url, {
+          method: "POST",
+          body: "data=" + encodeURIComponent(query),
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          signal: signal,
+        });
+        if (!res.ok) {
+          lastErr = new Error("HTTP " + res.status);
+          continue;
+        }
+        return await res.json();
+      } catch (e) {
+        if (e.name === "AbortError") throw e;
+        lastErr = e;
       }
     }
-    elevMinVal.textContent = lo;
-    elevMaxVal.textContent = hi;
-    peaks.forEach((peak) => {
-      const marker = peakMarkers.get(peak);
-      const el = marker.getElement();
-      if (!el) return;
-      const inRange = peak.elevation >= lo && peak.elevation <= hi;
-      el.classList.toggle("peak-marker-wrap--dimmed", !inRange);
+    throw lastErr || new Error("All Overpass endpoints failed");
+  }
+
+  async function fetchPeaks() {
+    const zoom = map.getZoom();
+    const bounds = map.getBounds();
+
+    // At very low zoom the world has too many peaks to return usefully.
+    if (zoom < 7) {
+      state.peaks = [];
+      render();
+      setStatus("zoom in to load peaks", "info");
+      return;
+    }
+
+    const key = bboxKey(bounds, zoom);
+    if (state.cache.has(key)) {
+      state.peaks = state.cache.get(key);
+      render();
+      return;
+    }
+
+    // Cancel any in-flight request.
+    if (state.inflight) state.inflight.abort();
+    const ctrl = new AbortController();
+    state.inflight = ctrl;
+    const mySeq = ++state.fetchSeq;
+
+    setStatus("loading peaks…", "loading");
+
+    const s = bounds.getSouth();
+    const w = bounds.getWest();
+    const n = bounds.getNorth();
+    const e = bounds.getEast();
+    const query =
+      "[out:json][timeout:25];" +
+      '(node["natural"="peak"](' + s + "," + w + "," + n + "," + e + ");" +
+      'node["natural"="volcano"](' + s + "," + w + "," + n + "," + e + "););" +
+      "out body;";
+
+    try {
+      const data = await overpassFetch(query, ctrl.signal);
+      if (mySeq !== state.fetchSeq) return; // a newer fetch superseded us
+      const peaks = (data.elements || [])
+        .map(parseOSMElement)
+        .filter(Boolean);
+      state.cache.set(key, peaks);
+      state.peaks = peaks;
+      setStatus(peaks.length + " peaks loaded", "ready");
+      render();
+    } catch (err) {
+      if (err.name === "AbortError") return;
+      console.error("Overpass fetch failed:", err);
+      setStatus("fetch failed — try again", "error");
+    } finally {
+      if (state.inflight === ctrl) state.inflight = null;
+    }
+  }
+
+  const fetchPeaksDebounced = debounce(fetchPeaks, 600);
+
+  // ---------------------------------------------------------------
+  // Rendering
+  // ---------------------------------------------------------------
+
+  function visiblePeaks() {
+    const lo = state.filters.eleMin;
+    const hi = state.filters.eleMax;
+    const requireName = state.filters.requireName;
+    const requireEle = state.filters.requireEle;
+
+    let arr = state.peaks.filter((p) => {
+      if (requireName && !p.name) return false;
+      if (requireEle && p.ele == null) return false;
+      if (p.ele == null) return true; // no-ele peaks pass the range filter
+      const v = metersToUnit(p.ele);
+      return v >= lo && v <= hi;
+    });
+
+    // Sort highest first so top-N keeps the most prominent peaks.
+    arr.sort((a, b) => {
+      const av = a.ele == null ? -Infinity : a.ele;
+      const bv = b.ele == null ? -Infinity : b.ele;
+      return bv - av;
+    });
+
+    if (state.filters.topN > 0) {
+      arr = arr.slice(0, state.filters.topN);
+    }
+    return arr;
+  }
+
+  function buildMarker(peak, dimmed) {
+    const nameHtml = peak.name
+      ? '<span class="pin__name">' + escapeHtml(peak.name) + "</span>"
+      : "";
+    const eleHtml =
+      peak.ele != null
+        ? '<span class="pin__ele">' + formatElev(peak.ele) + "</span>"
+        : "";
+    const label =
+      state.display.showLabels || state.display.showElev
+        ? '<span class="pin__label">' +
+          (state.display.showLabels ? nameHtml : "") +
+          (state.display.showElev ? eleHtml : "") +
+          "</span>"
+        : "";
+
+    const html =
+      '<div class="pin ' + (dimmed ? "pin--dim" : "") + '">' +
+      '<span class="pin__tri" aria-hidden="true"></span>' +
+      label +
+      "</div>";
+
+    const icon = L.divIcon({
+      className: "pin-wrap",
+      html: html,
+      iconSize: [0, 0],
+      iconAnchor: [0, 0],
+    });
+    return L.marker([peak.lat, peak.lng], {
+      icon: icon,
+      keyboard: false,
+      interactive: false,
+      zIndexOffset: peak.ele != null ? Math.round(peak.ele) : 0,
     });
   }
-  elevMin.addEventListener("input", applyElevationFilter);
-  elevMax.addEventListener("input", applyElevationFilter);
-  map.on("layeradd", applyElevationFilter);
 
-  // Layer toggles.
-  $("toggle-contours").addEventListener("change", (e) => {
-    if (e.target.checked) {
-      topoLayer.addTo(map);
-    } else {
-      map.removeLayer(topoLayer);
-    }
-  });
-  $("toggle-roads").addEventListener("change", (e) => {
-    if (e.target.checked) {
-      osmOverlay.addTo(map);
-    } else {
-      map.removeLayer(osmOverlay);
-    }
-  });
-  $("toggle-peaks").addEventListener("change", (e) => {
-    document.body.classList.toggle("hide-peaks", !e.target.checked);
-  });
-  $("toggle-peak-labels").addEventListener("change", (e) => {
-    document.body.classList.toggle("hide-peak-names", !e.target.checked);
-  });
-  $("toggle-elevations").addEventListener("change", (e) => {
-    document.body.classList.toggle("hide-elevations", !e.target.checked);
-  });
-  $("toggle-border").addEventListener("change", (e) => {
-    document.getElementById("poster").classList.toggle(
-      "poster--no-border",
-      !e.target.checked
-    );
-  });
-  $("toggle-attribution").addEventListener("change", (e) => {
-    if (e.target.checked) {
-      map.attributionControl.addTo(map);
-    } else {
-      map.attributionControl.remove();
-    }
-  });
+  function render() {
+    peaksGroup.clearLayers();
 
-  // Style sliders apply CSS filters to the map tile pane so they stack
-  // cheaply on whatever raster source is active.
-  const tilePane = map.getPanes().tilePane;
-  function applyStyleFilters() {
-    const sat = $("saturation").value;
-    const con = $("contrast").value;
-    const bri = $("brightness").value;
-    tilePane.style.filter =
-      "grayscale(" +
-      (100 - sat) +
-      "%) contrast(" +
-      con +
-      "%) brightness(" +
-      bri +
-      "%)";
+    const shown = visiblePeaks();
+    const shownIds = new Set(shown.map((p) => p.id));
+
+    // Always render shown peaks fully, render others dimmed so the map keeps
+    // its overall composition.
+    shown.forEach((peak) => {
+      buildMarker(peak, false).addTo(peaksGroup);
+    });
+    state.peaks.forEach((peak) => {
+      if (shownIds.has(peak.id)) return;
+      // Render unfiltered peaks faintly only if elevation data exists or names
+      // are present so we don't pollute the map with hundreds of unnamed nodes.
+      if (peak.ele == null && !peak.name) return;
+      buildMarker(peak, true).addTo(peaksGroup);
+    });
+
+    updateBadges(shown);
+    updatePeakList(shown);
+    updateAutoElevationRange();
   }
-  ["saturation", "contrast", "brightness"].forEach((id) => {
-    $(id).addEventListener("input", applyStyleFilters);
-  });
-  applyStyleFilters();
 
-  // Aspect ratio. The poster element drives the CSS sizing; we just have
-  // to invalidate the map so Leaflet re-measures.
-  const poster = $("poster");
-  $("aspect").addEventListener("change", (e) => {
-    poster.dataset.aspect = e.target.value;
-    setTimeout(() => map.invalidateSize(), 50);
-  });
+  function updateBadges(shown) {
+    $("chip-peaks").textContent =
+      shown.length + " peak" + (shown.length === 1 ? "" : "s");
+    $("badge-peaks").textContent = String(shown.length);
+  }
 
-  $("fit-peaks").addEventListener("click", () => {
-    const lo = +elevMin.value;
-    const hi = +elevMax.value;
-    const visible = peaks.filter(
-      (p) => p.elevation >= lo && p.elevation <= hi
+  function updatePeakList(shown) {
+    const list = $("peaklist");
+    if (!shown.length) {
+      list.innerHTML =
+        '<li class="peaklist__empty">No peaks match the current filters.</li>';
+      return;
+    }
+    list.innerHTML = shown
+      .map((p) => {
+        const name = p.name
+          ? escapeHtml(p.name)
+          : '<em class="peaklist__unnamed">unnamed</em>';
+        const ele =
+          p.ele != null
+            ? '<span class="peaklist__ele">' + formatElev(p.ele) + "</span>"
+            : '<span class="peaklist__ele peaklist__ele--missing">—</span>';
+        return (
+          '<li class="peaklist__item" ' +
+          'data-lat="' + p.lat + '" data-lng="' + p.lng + '">' +
+          '<span class="peaklist__name">' + name + "</span>" +
+          ele +
+          "</li>"
+        );
+      })
+      .join("");
+  }
+
+  // ---------------------------------------------------------------
+  // Auto-range the elevation slider to currently loaded peaks so the
+  // handles aren't sitting at extremes the user can't reach.
+  // ---------------------------------------------------------------
+
+  function updateAutoElevationRange() {
+    const eles = state.peaks
+      .map((p) => p.ele)
+      .filter((e) => e != null)
+      .map(metersToUnit);
+    if (!eles.length) return;
+    const lo = Math.floor(Math.min(...eles) / 10) * 10;
+    const hi = Math.ceil(Math.max(...eles) / 10) * 10;
+
+    const slMin = $("elev-min");
+    const slMax = $("elev-max");
+    slMin.min = lo;
+    slMin.max = hi;
+    slMax.min = lo;
+    slMax.max = hi;
+
+    if (!state.filters.eleMinManual) {
+      slMin.value = lo;
+      state.filters.eleMin = lo;
+    }
+    if (!state.filters.eleMaxManual) {
+      slMax.value = hi;
+      state.filters.eleMax = hi;
+    }
+    updateElevReadout();
+  }
+
+  function updateElevReadout() {
+    $("elev-readout").textContent =
+      Math.round(state.filters.eleMin) +
+      " / " +
+      Math.round(state.filters.eleMax) +
+      " " +
+      state.unit;
+  }
+
+  // ---------------------------------------------------------------
+  // Geocoding via Nominatim for the search box
+  // ---------------------------------------------------------------
+
+  async function searchPlace(q) {
+    if (!q.trim()) return [];
+    const params = new URLSearchParams({
+      q: q,
+      format: "json",
+      limit: "5",
+      addressdetails: "0",
+    });
+    const res = await fetch(NOMINATIM_URL + "?" + params.toString(), {
+      headers: { Accept: "application/json" },
+    });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    return res.json();
+  }
+
+  function showSearchResults(items) {
+    const ul = $("search-results");
+    if (!items.length) {
+      ul.innerHTML = "";
+      ul.style.display = "none";
+      return;
+    }
+    ul.innerHTML = items
+      .map(
+        (it, i) =>
+          '<li><button type="button" data-idx="' +
+          i +
+          '">' +
+          escapeHtml(it.display_name) +
+          "</button></li>"
+      )
+      .join("");
+    ul.style.display = "block";
+    ul.querySelectorAll("button").forEach((b) =>
+      b.addEventListener("click", () => {
+        const it = items[+b.dataset.idx];
+        // Jumping somewhere new should let the filter auto-range to the new
+        // region's peaks rather than carry over the previous values.
+        state.filters.eleMinManual = false;
+        state.filters.eleMaxManual = false;
+        if (it.boundingbox) {
+          const [s, n, w, e] = it.boundingbox.map(parseFloat);
+          map.fitBounds([
+            [s, w],
+            [n, e],
+          ]);
+        } else {
+          map.setView([+it.lat, +it.lon], 11);
+        }
+        ul.style.display = "none";
+        $("search-input").value = it.display_name;
+      })
     );
-    if (!visible.length) return;
-    const bounds = L.latLngBounds(visible.map((p) => [p.lat, p.lng]));
-    map.fitBounds(bounds, { padding: [50, 50] });
-  });
+  }
 
-  $("print").addEventListener("click", () => {
-    window.print();
-  });
+  // ---------------------------------------------------------------
+  // Wire up controls
+  // ---------------------------------------------------------------
 
-  // Default attribution position.
-  map.attributionControl.setPosition("bottomleft");
-  map.attributionControl.addTo(map);
+  function wirePanel() {
+    $("toggle-panel").addEventListener("click", (e) => {
+      const panel = $("panel");
+      const open = panel.classList.toggle("panel--closed") ? false : true;
+      e.currentTarget.setAttribute("aria-expanded", open ? "true" : "false");
+      setTimeout(() => map.invalidateSize(), 220);
+    });
+  }
 
-  // Show coordinates of the center in the footer (nice cartographic touch).
-  function updateFooterCoords() {
+  function wireUnits() {
+    function setUnit(unit) {
+      if (unit === state.unit) return;
+      // Convert current slider values to the new unit so we don't lose the
+      // user's intent.
+      const oldMin = state.filters.eleMin;
+      const oldMax = state.filters.eleMax;
+      const oldUnit = state.unit;
+      state.unit = unit;
+      const conv = (v) =>
+        oldUnit === unit
+          ? v
+          : oldUnit === "ft"
+          ? v / M_TO_FT // ft -> m
+          : v * M_TO_FT; // m -> ft
+      state.filters.eleMin = conv(oldMin);
+      state.filters.eleMax = conv(oldMax);
+
+      $("unit-ft").classList.toggle("seg__btn--on", unit === "ft");
+      $("unit-m").classList.toggle("seg__btn--on", unit === "m");
+      $("foot-unit").textContent = "elevations in " + (unit === "ft" ? "feet" : "meters");
+      render();
+    }
+    $("unit-ft").addEventListener("click", () => setUnit("ft"));
+    $("unit-m").addEventListener("click", () => setUnit("m"));
+  }
+
+  function wireFilters() {
+    const slMin = $("elev-min");
+    const slMax = $("elev-max");
+
+    function onMin() {
+      let lo = +slMin.value;
+      let hi = +slMax.value;
+      if (lo > hi) {
+        lo = hi;
+        slMin.value = lo;
+      }
+      state.filters.eleMin = lo;
+      state.filters.eleMinManual = true;
+      updateElevReadout();
+      render();
+    }
+    function onMax() {
+      let lo = +slMin.value;
+      let hi = +slMax.value;
+      if (hi < lo) {
+        hi = lo;
+        slMax.value = hi;
+      }
+      state.filters.eleMax = hi;
+      state.filters.eleMaxManual = true;
+      updateElevReadout();
+      render();
+    }
+    slMin.addEventListener("input", onMin);
+    slMax.addEventListener("input", onMax);
+
+    $("opt-require-name").addEventListener("change", (e) => {
+      state.filters.requireName = e.target.checked;
+      render();
+    });
+    $("opt-require-ele").addEventListener("change", (e) => {
+      state.filters.requireEle = e.target.checked;
+      render();
+    });
+    $("opt-show-labels").addEventListener("change", (e) => {
+      state.display.showLabels = e.target.checked;
+      render();
+    });
+    $("opt-show-elev").addEventListener("change", (e) => {
+      state.display.showElev = e.target.checked;
+      render();
+    });
+
+    const topn = $("opt-topn");
+    topn.addEventListener("input", () => {
+      state.filters.topN = +topn.value;
+      $("topn-readout").textContent =
+        state.filters.topN === 0 ? "all" : String(state.filters.topN);
+      render();
+    });
+  }
+
+  function wireStyle() {
+    $("opt-topo").addEventListener("change", (e) => {
+      if (e.target.checked) topoLayer.addTo(map);
+      else map.removeLayer(topoLayer);
+    });
+    $("opt-osm").addEventListener("change", (e) => {
+      if (e.target.checked) osmLayer.addTo(map);
+      else map.removeLayer(osmLayer);
+    });
+    $("opt-attribution").addEventListener("change", (e) => {
+      if (e.target.checked) map.attributionControl.addTo(map);
+      else map.attributionControl.remove();
+    });
+    $("opt-border").addEventListener("change", (e) => {
+      $("poster").classList.toggle("poster--noborder", !e.target.checked);
+    });
+
+    const tilePane = map.getPanes().tilePane;
+    function applyFilters() {
+      const s = $("opt-sat").value;
+      const c = $("opt-con").value;
+      const b = $("opt-bri").value;
+      $("sat-readout").textContent = s + "%";
+      $("con-readout").textContent = c + "%";
+      $("bri-readout").textContent = b + "%";
+      tilePane.style.filter =
+        "grayscale(" + (100 - s) + "%) contrast(" + c + "%) brightness(" + b + "%)";
+    }
+    ["opt-sat", "opt-con", "opt-bri"].forEach((id) =>
+      $(id).addEventListener("input", applyFilters)
+    );
+    applyFilters();
+  }
+
+  function wirePoster() {
+    const titleIn = $("poster-title");
+    const subIn = $("poster-subtitle");
+    titleIn.addEventListener("input", () => {
+      $("title-display").textContent = titleIn.value;
+    });
+    subIn.addEventListener("input", () => {
+      $("subtitle-display").textContent = subIn.value;
+      $("subtitle-display").style.display = subIn.value ? "" : "none";
+    });
+    $("aspect").addEventListener("change", (e) => {
+      $("poster").dataset.aspect = e.target.value;
+      setTimeout(() => map.invalidateSize(), 80);
+    });
+    $("print").addEventListener("click", () => window.print());
+  }
+
+  function wireSearch() {
+    const input = $("search-input");
+    const btn = $("search-btn");
+    let cur = [];
+
+    const run = async () => {
+      const q = input.value.trim();
+      if (!q) {
+        showSearchResults([]);
+        return;
+      }
+      setStatus("searching…", "loading");
+      try {
+        cur = await searchPlace(q);
+        showSearchResults(cur);
+        setStatus("ready", "ready");
+      } catch (e) {
+        setStatus("search failed", "error");
+      }
+    };
+
+    btn.addEventListener("click", run);
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        run();
+      }
+    });
+    document.addEventListener("click", (e) => {
+      if (!e.target.closest(".combo") && !e.target.closest(".combo__results")) {
+        $("search-results").style.display = "none";
+      }
+    });
+  }
+
+  function resetElevationFilter() {
+    state.filters.eleMinManual = false;
+    state.filters.eleMaxManual = false;
+  }
+
+  function wirePresets() {
+    document.querySelectorAll(".preset").forEach((b) => {
+      b.addEventListener("click", () => {
+        const [s, w, n, e] = b.dataset.bounds.split(",").map(parseFloat);
+        // Reset the filter so the new region's peaks aren't dimmed by
+        // values that made sense for a different range.
+        resetElevationFilter();
+        map.fitBounds([
+          [s, w],
+          [n, e],
+        ]);
+        // Suggest a sensible title without forcing it on the user.
+        const cur = $("poster-title").value;
+        if (cur === "High Peaks" || !cur) {
+          $("poster-title").value = b.dataset.label;
+          $("title-display").textContent = b.dataset.label;
+        }
+      });
+    });
+  }
+
+  function wirePeakList() {
+    const list = $("peaklist");
+    let highlight = null;
+    list.addEventListener("mouseover", (e) => {
+      const li = e.target.closest(".peaklist__item");
+      if (!li) return;
+      const lat = +li.dataset.lat;
+      const lng = +li.dataset.lng;
+      if (highlight) map.removeLayer(highlight);
+      highlight = L.circleMarker([lat, lng], {
+        radius: 14,
+        color: "#000",
+        weight: 2,
+        fillColor: "#ffd400",
+        fillOpacity: 0.6,
+      }).addTo(map);
+    });
+    list.addEventListener("mouseout", (e) => {
+      if (!e.relatedTarget || !e.relatedTarget.closest(".peaklist")) {
+        if (highlight) {
+          map.removeLayer(highlight);
+          highlight = null;
+        }
+      }
+    });
+    list.addEventListener("click", (e) => {
+      const li = e.target.closest(".peaklist__item");
+      if (!li) return;
+      const lat = +li.dataset.lat;
+      const lng = +li.dataset.lng;
+      map.flyTo([lat, lng], Math.max(map.getZoom(), 13), { duration: 0.5 });
+    });
+  }
+
+  function updateFooter() {
     const c = map.getCenter();
-    const lat = Math.abs(c.lat).toFixed(2);
-    const lng = Math.abs(c.lng).toFixed(2);
-    $("footer-left").textContent =
-      lat + "°" + (c.lat >= 0 ? "N" : "S") +
-      " · " +
-      lng + "°" + (c.lng >= 0 ? "E" : "W");
+    const lat = Math.abs(c.lat).toFixed(2) + "°" + (c.lat >= 0 ? "N" : "S");
+    const lng = Math.abs(c.lng).toFixed(2) + "°" + (c.lng >= 0 ? "E" : "W");
+    $("foot-coord").textContent = lat + " " + lng;
+    $("foot-scale").textContent = "z" + map.getZoom();
+    $("chip-zoom").textContent = "z" + map.getZoom();
   }
-  map.on("moveend", updateFooterCoords);
-  updateFooterCoords();
 
-  // Recompute on window resize so the map stays sharp.
-  window.addEventListener("resize", () => {
-    map.invalidateSize();
+  // ---------------------------------------------------------------
+  // Boot
+  // ---------------------------------------------------------------
+
+  wirePanel();
+  wireUnits();
+  wireFilters();
+  wireStyle();
+  wirePoster();
+  wireSearch();
+  wirePresets();
+  wirePeakList();
+
+  map.on("moveend", () => {
+    updateFooter();
+    fetchPeaksDebounced();
   });
+  map.on("zoomend", updateFooter);
+  window.addEventListener("resize", () => map.invalidateSize());
+
+  // Initial run.
+  updateFooter();
+  updateElevReadout();
+  fetchPeaks();
 })();

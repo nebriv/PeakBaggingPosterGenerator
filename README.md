@@ -1,32 +1,47 @@
-# ADK 46 Poster Generator
+# Peak Bagging Poster Generator
 
-A browser-based map generator for designing a framable poster of the
-Adirondack 46 High Peaks. Inspired by the look of
-[cartocuts.com](https://cartocuts.com), but with the filters needed for
-peak-bagging posters — most importantly, filtering by elevation.
+Design a framable, topographic poster of any peak-bagging list — Adirondack
+46ers, Catskill 3500, NH Whites, Colorado 14ers, the Alps, wherever — and
+print it from your browser.
 
-The map is rendered with [Leaflet](https://leafletjs.com/) on top of
-[OpenTopoMap](https://opentopomap.org/) tiles (contours + hillshade) styled
-into black and white with CSS filters. The 46ers are drawn as labeled
-markers with their elevations.
+Pan/zoom to the region you care about. Peaks load live from
+[OpenStreetMap](https://www.openstreetmap.org/) via the Overpass API.
+Filter by elevation, name, or top-N. Pure black-and-white topo styling so
+you can frame it on the wall and highlight your finished trails right on
+the glass.
+
+Nothing is hardcoded. Everything renders in the browser.
 
 ## Use
 
 1. Open the site.
-2. Pick an aspect ratio for the poster.
-3. Use the elevation slider to dim peaks outside the range you care about.
-4. Toggle layers (contours, road overlay, peak names, elevations, border).
-5. Pan/zoom to frame the composition.
-6. Hit **Print / Save as PDF** — set the print dialog's margins to "None"
-   and choose a paper size that matches your aspect ratio.
+2. Drag/zoom the map, or pick a region preset, or type a place name to
+   jump there.
+3. Set the elevation filter to the peaks you care about. Out-of-range
+   peaks stay visible but dim so the map's composition isn't ruined.
+4. Tweak style and frame:
+   - Toggle contours/hillshade, road overlay, attribution.
+   - Adjust saturation (`0%` = pure B&W), contrast, brightness.
+   - Pick an aspect ratio to match your frame (12×18, 18×24, etc.).
+   - Set a title and subtitle.
+5. **Print / PDF** → in the browser print dialog set margins to None and a
+   paper size that matches your aspect ratio.
 
-To physically highlight your hiked trails, print the poster, frame it
-behind glass, and use a fine-tip wet-erase or dry-erase marker on the
-glass.
+To highlight your hiked trails on the printed poster, frame it behind
+glass and use a fine-tip wet-erase or dry-erase marker.
+
+## Why these choices
+
+- **Leaflet** for the map (no API key, MIT licensed).
+- **OpenTopoMap** raster tiles have contour lines and hillshade baked in.
+  CSS filters apply the grayscale aesthetic on the client.
+- **Overpass API** for peak data. Cached by viewport so panning back
+  doesn't refetch.
+- **Nominatim** for the place search box.
+
+No build step, no server, no API keys — just static files.
 
 ## Develop locally
-
-There's no build step. Any static file server works:
 
 ```sh
 python3 -m http.server 8000
@@ -34,25 +49,25 @@ python3 -m http.server 8000
 npx serve .
 ```
 
-Then open <http://localhost:8000>.
+Open <http://localhost:8000>.
 
 ## Deploy
 
-A workflow at `.github/workflows/deploy.yml` publishes the repo to GitHub
-Pages on every push to `main`. After the first run:
+`.github/workflows/deploy.yml` publishes the site to GitHub Pages on every
+push to `main`. After the first run:
 
-1. Open the repository's **Settings → Pages**.
-2. Set **Source** to **GitHub Actions**.
+1. Repo **Settings → Pages**
+2. Set **Source** to **GitHub Actions**
 
-The site will be served from your `*.github.io` URL.
+The site is served from your `*.github.io` URL.
 
-## Data
+## Etiquette
 
-`js/peaks.js` is the traditional ADK 46 list (kept intact even where modern
-surveys have moved a few peaks below 4000 ft). Coordinates are summit
-positions and elevations are in feet.
+OpenTopoMap, Nominatim, and Overpass are community resources. Please don't
+hammer them — for high-traffic use, host your own tiles or stand up a
+private Overpass instance.
 
 ## License
 
-Code: MIT. Tile data: see attribution on the map (OpenTopoMap CC-BY-SA,
-OSM ODbL, SRTM).
+MIT for the code. Tile and data attribution is rendered on the poster
+itself (OpenTopoMap CC-BY-SA, OSM ODbL, SRTM).
