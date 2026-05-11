@@ -194,9 +194,48 @@
               <span>03</span> Style
             </summary>
             <div class="panel__body">
+              <label class="field">
+                <span class="field__label">Map style</span>
+                <select id="opt-map-style">
+                  <option value="hillshade" selected>
+                    Hillshade — clean grayscale (Esri)
+                  </option>
+                  <option value="toner">
+                    Toner — high-contrast B&amp;W (Stamen)
+                  </option>
+                  <option value="opentopomap">
+                    OpenTopoMap — classic topo with labels
+                  </option>
+                  <option value="light">Light minimal (CARTO)</option>
+                  <option value="dark">Dark minimal (CARTO)</option>
+                  <option value="satellite">Satellite imagery (Esri)</option>
+                  <option value="paper">Paper only — no basemap</option>
+                </select>
+                <p class="field__hint">
+                  Try a few — the saturation/contrast sliders below tune
+                  each style further.
+                </p>
+              </label>
               <label class="check">
-                <input type="checkbox" id="opt-topo" checked />
-                <span>Contours &amp; hillshade</span>
+                <input type="checkbox" id="opt-contours" checked />
+                <span>Contour lines overlay</span>
+              </label>
+              <label class="field">
+                <span class="field__label">
+                  Contour density
+                  <span class="field__value" id="contour-readout">60%</span>
+                </span>
+                <input
+                  type="range"
+                  id="opt-contour-density"
+                  min="0"
+                  max="100"
+                  value="60"
+                />
+                <p class="field__hint">
+                  Topographic lines only — no place names. Slide down for a
+                  cleaner poster, up for denser detail.
+                </p>
               </label>
               <label class="check">
                 <input type="checkbox" id="opt-osm" />

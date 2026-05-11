@@ -107,14 +107,86 @@
     .attribution({ position: "bottomleft", prefix: false })
     .addTo(map);
 
-  const topoLayer = L.tileLayer(
-    "https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png",
+  // Base map styles. The user picks one from the "Map style" dropdown.
+  // Each option is a meaningfully different look — clean hillshade, classic
+  // topo (with labels, for users who want them back), satellite, etc. All
+  // bases share zIndex:1 so the contour and road overlays sit above them.
+  const baseLayers = {
+    hillshade: L.tileLayer(
+      "https://server.arcgisonline.com/ArcGIS/rest/services/Elevation/World_Hillshade/MapServer/tile/{z}/{y}/{x}",
+      {
+        maxZoom: 18,
+        zIndex: 1,
+        attribution:
+          'Hillshade © <a href="https://www.esri.com/">Esri</a>, USGS, NOAA',
+      }
+    ),
+    toner: L.tileLayer(
+      "https://tiles.stadiamaps.com/tiles/stamen_toner_background/{z}/{x}/{y}.png",
+      {
+        maxZoom: 18,
+        zIndex: 1,
+        attribution:
+          'Tiles © <a href="https://stadiamaps.com/">Stadia Maps</a>, ' +
+          '<a href="https://stamen.com/">Stamen Design</a>; ' +
+          'data © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+      }
+    ),
+    opentopomap: L.tileLayer(
+      "https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png",
+      {
+        maxZoom: 17,
+        subdomains: "abc",
+        zIndex: 1,
+        attribution:
+          '© <a href="https://opentopomap.org/">OpenTopoMap</a> ' +
+          '(<a href="https://creativecommons.org/licenses/by-sa/3.0/">CC-BY-SA</a>), ' +
+          'data © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+      }
+    ),
+    light: L.tileLayer(
+      "https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}.png",
+      {
+        maxZoom: 19,
+        subdomains: "abcd",
+        zIndex: 1,
+        attribution:
+          'Tiles © <a href="https://carto.com/">CARTO</a>, ' +
+          'data © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+      }
+    ),
+    dark: L.tileLayer(
+      "https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}.png",
+      {
+        maxZoom: 19,
+        subdomains: "abcd",
+        zIndex: 1,
+        attribution:
+          'Tiles © <a href="https://carto.com/">CARTO</a>, ' +
+          'data © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+      }
+    ),
+    satellite: L.tileLayer(
+      "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+      {
+        maxZoom: 19,
+        zIndex: 1,
+        attribution:
+          'Imagery © <a href="https://www.esri.com/">Esri</a>, Maxar, Earthstar Geographics',
+      }
+    ),
+  };
+
+  // Contour overlay: purely topographic lines, no labels.
+  const contourLayer = L.tileLayer(
+    "https://tiles.stadiamaps.com/tiles/stamen_terrain_lines/{z}/{x}/{y}.png",
     {
-      maxZoom: 17,
-      subdomains: "abc",
+      maxZoom: 18,
+      opacity: 0.6,
+      zIndex: 2,
       attribution:
-        '© <a href="https://opentopomap.org/">OpenTopoMap</a> ' +
-        '(<a href="https://creativecommons.org/licenses/by-sa/3.0/">CC-BY-SA</a>), ' +
+        'Contours © <a href="https://stadiamaps.com/">Stadia Maps</a>, ' +
+        '<a href="https://stamen.com/">Stamen Design</a>; ' +
         'data © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
     }
   );
@@ -123,11 +195,22 @@
     {
       maxZoom: 19,
       opacity: 0.35,
+      zIndex: 3,
       attribution:
         '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
     }
   );
-  topoLayer.addTo(map);
+
+  let currentBaseKey = "hillshade";
+  function applyMapStyle(key) {
+    const prev = baseLayers[currentBaseKey];
+    if (prev) map.removeLayer(prev);
+    currentBaseKey = key;
+    const next = baseLayers[key];
+    if (next) next.addTo(map);
+  }
+  baseLayers[currentBaseKey].addTo(map);
+  contourLayer.addTo(map);
 
   const peaksGroup = L.layerGroup().addTo(map);
 
@@ -303,13 +386,15 @@
       peak.ele != null
         ? '<span class="pin__ele">' + formatElev(peak.ele) + "</span>"
         : "";
-    const label =
-      state.display.showLabels || state.display.showElev
-        ? '<span class="pin__label">' +
-          (state.display.showLabels ? nameHtml : "") +
-          (state.display.showElev ? eleHtml : "") +
-          "</span>"
-        : "";
+    const showLabel =
+      (state.display.showLabels || state.display.showElev) &&
+      !peak._labelHidden;
+    const label = showLabel
+      ? '<span class="pin__label">' +
+        (state.display.showLabels ? nameHtml : "") +
+        (state.display.showElev ? eleHtml : "") +
+        "</span>"
+      : "";
 
     const html =
       '<div class="pin ' + (dimmed ? "pin--dim" : "") + '">' +
@@ -331,10 +416,35 @@
     });
   }
 
+  // Greedy label de-cluttering: walk the prominence-sorted list and hide the
+  // label of any pin whose projected pixel position is too close to an already-
+  // shown one. The triangle marker stays so the user still sees every peak.
+  function suppressOverlappingLabels(peaks) {
+    const zoom = map.getZoom();
+    // Rough label footprint; tuned for the current pin style (.pin__label is
+    // ~75–90px wide depending on the name, ~28px tall with name + elevation).
+    const minSepX = 78;
+    const minSepY = 26;
+    const placed = [];
+    peaks.forEach((p) => {
+      const pt = map.project([p.lat, p.lng], zoom);
+      const collides = placed.some((sp) => {
+        const spt = map.project([sp.lat, sp.lng], zoom);
+        return (
+          Math.abs(pt.x - spt.x) < minSepX &&
+          Math.abs(pt.y - spt.y) < minSepY
+        );
+      });
+      p._labelHidden = collides;
+      if (!collides) placed.push(p);
+    });
+  }
+
   function render() {
     peaksGroup.clearLayers();
 
     const shown = visiblePeaks();
+    suppressOverlappingLabels(shown);
     const shownIds = new Set(shown.map((p) => p.id));
 
     // Always render shown peaks fully, render others dimmed so the map keeps
@@ -586,9 +696,12 @@
   }
 
   function wireStyle() {
-    $("opt-topo").addEventListener("change", (e) => {
-      if (e.target.checked) topoLayer.addTo(map);
-      else map.removeLayer(topoLayer);
+    $("opt-map-style").addEventListener("change", (e) => {
+      applyMapStyle(e.target.value);
+    });
+    $("opt-contours").addEventListener("change", (e) => {
+      if (e.target.checked) contourLayer.addTo(map);
+      else map.removeLayer(contourLayer);
     });
     $("opt-osm").addEventListener("change", (e) => {
       if (e.target.checked) osmLayer.addTo(map);
@@ -600,6 +713,13 @@
     });
     $("opt-border").addEventListener("change", (e) => {
       $("poster").classList.toggle("poster--noborder", !e.target.checked);
+    });
+
+    const contourSlider = $("opt-contour-density");
+    contourSlider.addEventListener("input", () => {
+      const v = +contourSlider.value;
+      contourLayer.setOpacity(v / 100);
+      $("contour-readout").textContent = v + "%";
     });
 
     const tilePane = map.getPanes().tilePane;
@@ -757,7 +877,12 @@
     updateFooter();
     fetchPeaksDebounced();
   });
-  map.on("zoomend", updateFooter);
+  map.on("zoomend", () => {
+    updateFooter();
+    // Pixel separation between peaks changes with zoom, so the collision
+    // map has to be rebuilt to keep labels readable.
+    render();
+  });
   window.addEventListener("resize", () => map.invalidateSize());
 
   // Initial run.
