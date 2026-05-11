@@ -232,15 +232,33 @@
     }
   );
 
+  // Each base layer has a perceived tone so pin colors can flip to stay
+  // legible — paper-ink on light bases, ink-paper on dark ones.
+  const baseLayerTones = {
+    hillshade: "light",
+    toner: "light",
+    opentopomap: "light",
+    light: "light",
+    dark: "dark",
+    satellite: "dark",
+    paper: "light",
+  };
+
   let currentBaseKey = "hillshade";
+  function setMapTone(key) {
+    const dark = (baseLayerTones[key] || "light") === "dark";
+    map.getContainer().classList.toggle("map--dark-base", dark);
+  }
   function applyMapStyle(key) {
     const prev = baseLayers[currentBaseKey];
     if (prev) map.removeLayer(prev);
     currentBaseKey = key;
     const next = baseLayers[key];
     if (next) next.addTo(map);
+    setMapTone(key);
   }
   baseLayers[currentBaseKey].addTo(map);
+  setMapTone(currentBaseKey);
   contourLayer.addTo(map);
 
   const peaksGroup = L.layerGroup().addTo(map);
@@ -435,12 +453,12 @@
         "</span>"
       : "";
 
-    // SVG triangle with a paper-colored stroke so it stays legible on
-    // hillshade, contour, and satellite alike.
+    // SVG triangle — fill/stroke are owned by CSS so they can flip when
+    // the basemap tone changes.
     const tri =
       '<svg class="pin__tri" viewBox="0 0 12 11" aria-hidden="true">' +
-      '<polygon points="6,1 11,10 1,10" fill="currentColor" ' +
-      'stroke="#f6f1e6" stroke-width="0.9" stroke-linejoin="round"/>' +
+      '<polygon points="6,1 11,10 1,10" ' +
+      'stroke-width="0.9" stroke-linejoin="round"/>' +
       "</svg>";
 
     const html =

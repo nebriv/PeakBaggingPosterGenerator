@@ -839,6 +839,11 @@ input[type="range"]::-moz-range-thumb {
   margin: 0 auto;
   filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.18));
 }
+.pin__tri polygon {
+  fill: var(--ink);
+  stroke: var(--paper);
+  transition: fill 0.15s, stroke 0.15s;
+}
 .pin__label {
   display: inline-flex;
   flex-direction: column;
@@ -879,6 +884,33 @@ input[type="range"]::-moz-range-thumb {
 }
 .pin--dim .pin__label {
   display: none;
+}
+
+/* When the basemap is dark (Dark minimal, Satellite, etc.), flip the
+   ink/paper roles so triangles and labels stay legible. */
+.map--dark-base .pin__tri polygon {
+  fill: var(--paper);
+  stroke: var(--ink);
+}
+.map--dark-base .pin__tri {
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.6));
+}
+.map--dark-base .pin__name {
+  color: var(--paper);
+  text-shadow:
+    -1px -1px 0 var(--ink),
+    1px -1px 0 var(--ink),
+    -1px 1px 0 var(--ink),
+    1px 1px 0 var(--ink),
+    0 0 3px var(--ink);
+}
+.map--dark-base .pin__ele {
+  color: rgba(246, 241, 230, 0.78);
+  text-shadow:
+    -1px -1px 0 var(--ink),
+    1px -1px 0 var(--ink),
+    -1px 1px 0 var(--ink),
+    1px 1px 0 var(--ink);
 }
 
 /* --- Responsive ---------------------------------------------- */
