@@ -200,9 +200,6 @@
                   <option value="hillshade" selected>
                     Hillshade — clean grayscale (Esri)
                   </option>
-                  <option value="toner">
-                    Toner — high-contrast B&amp;W (Stamen)
-                  </option>
                   <option value="opentopomap">
                     OpenTopoMap — classic topo with labels
                   </option>
@@ -223,18 +220,19 @@
               <label class="field">
                 <span class="field__label">
                   Contour density
-                  <span class="field__value" id="contour-readout">60%</span>
+                  <span class="field__value" id="contour-readout">30%</span>
                 </span>
                 <input
                   type="range"
                   id="opt-contour-density"
                   min="0"
                   max="100"
-                  value="60"
+                  value="30"
                 />
                 <p class="field__hint">
-                  Topographic lines only — no place names. Slide down for a
-                  cleaner poster, up for denser detail.
+                  Adds OpenTopoMap contours over the basemap. Faint OSM
+                  place names ride along — lower opacity fades them out,
+                  higher opacity shows more contour detail.
                 </p>
               </label>
               <label class="check">
