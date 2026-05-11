@@ -1,12 +1,18 @@
 /* Peak Bagging Poster Generator
  *
- * Dynamic, region-agnostic topographic poster designer. Peaks are fetched
- * live from OpenStreetMap via the Overpass API; the user pans/zooms the map
- * to any region (ADK 46, Catskill 3500, Whites, 14ers, Alps, etc.) and the
- * peaks update. Nothing is hardcoded.
+ * Vector-rendered topographic poster designer built on MapLibre GL JS.
  *
- * Output style is intentionally clean and high-contrast so the poster can
- * be framed and (e.g.) trails highlighted on the glass.
+ * Base map: Stadia Maps vector styles (Alidade, Outdoors, Toner, …) or a
+ *   custom "hillshade-only" style built from open DEM data.
+ * Hillshade: AWS Terrain Tiles (terrarium PNG) fed into MapLibre's
+ *   built-in `hillshade` shader — smooth at any zoom, no pre-baked rasters.
+ * Contours: `maplibre-contour` generates true vector contour lines client-
+ *   side from the same DEM source. Intervals scale with zoom.
+ * Peaks: Live OSM data via Overpass, cached by grid cell so panning is
+ *   instant. Markers are HTML overlays (DivIcon-style) so the icon picker,
+ *   label collision, and tone-flipping logic share one rendering path.
+ * Print: A temporary MapLibre instance is rendered at a higher pixelRatio
+ *   for the print/PDF path — vector tiles re-rasterise crisply at any DPI.
  */
 (function () {
   "use strict";
@@ -24,10 +30,17 @@
 
   const M_TO_FT = 3.28084;
 
-  // Peaks are cached by grid cell so panning across the same region is
-  // instant and we don't make the same Overpass request twice. Cell size
-  // varies by zoom to keep the per-fetch payload reasonable.
-  const PEAK_CACHE_TTL_MS = 12 * 60 * 60 * 1000; // 12 h — keeps long sessions snappy
+  // AWS Terrain Tiles — open DEM data, terrarium PNG encoding. The same
+  // source feeds both the MapLibre hillshade layer and the contour
+  // generator, so we only fetch each DEM tile once.
+  const DEM_TILES =
+    "https://elevation-tiles-prod.s3.amazonaws.com/terrarium/{z}/{x}/{y}.png";
+  const DEM_ATTRIBUTION =
+    '<a href="https://registry.opendata.aws/terrain-tiles/">AWS Terrain Tiles</a>';
+
+  // Peak cache TTL — 12h is comfortable for long editing sessions while
+  // still picking up Overpass edits the next day.
+  const PEAK_CACHE_TTL_MS = 12 * 60 * 60 * 1000;
 
   function gridStep(zoom) {
     if (zoom <= 8) return 1.0;
@@ -36,28 +49,15 @@
     return 0.1;
   }
 
-  // Pick the coarsest grid step that keeps the per-fetch cell count below
-  // a safe ceiling so a wide low-zoom viewport doesn't kick off a 100-cell
-  // Overpass query.
-  function chooseCellsForBounds(bounds, zoom) {
-    let step = gridStep(zoom);
-    let cells = cellsForBounds(bounds, step);
-    while (cells.length > 30) {
-      step *= 2;
-      cells = cellsForBounds(bounds, step);
-    }
-    return { cells, step };
-  }
-
   const state = {
-    unit: "ft", // "ft" | "m"
-    peaks: [], // current rendered set from Overpass
-    cache: new Map(), // cellKey -> { peaks, t }
-    fetchSeq: 0, // race-condition guard
-    inflight: null, // AbortController
-    prefetchTimer: null, // debounced neighbor prefetch
-    custom: [], // user-added peaks, persisted to localStorage
-    excluded: new Set(), // peak IDs (OSM or custom) the user has hidden
+    unit: "ft",
+    peaks: [],
+    cache: new Map(),
+    fetchSeq: 0,
+    inflight: null,
+    prefetchTimer: null,
+    custom: [],
+    excluded: new Set(),
     filters: {
       eleMin: 0,
       eleMax: 9000,
@@ -73,11 +73,16 @@
       border: true,
     },
     style: {
-      icon: "triangle", // peakIcons key
-      paperColor: "#f6f1e6", // poster + map background
-      blendMap: false, // mix-blend-mode: multiply on base tile pane
-      contourSource: "opentopo", // contourSources key
-      stadiaKey: "", // optional Stadia Maps API key
+      icon: "triangle",
+      paperColor: "#f6f1e6",
+      blendMap: false,
+      basemap: "hillshade-only",
+      contoursEnabled: true,
+      contourDensity: 60,
+      contourLabels: true,
+      hillshadeStrength: 50,
+      stadiaKey: "",
+      printDpi: 3,
     },
   };
 
@@ -94,7 +99,6 @@
         Object.assign(state.style, data.style);
       }
     } catch (e) {
-      // Corrupt storage shouldn't break the app — just log and move on.
       console.warn("Could not load user data:", e);
     }
   }
@@ -144,16 +148,9 @@
     chip.dataset.kind = kind || "ready";
   }
 
-  // ---------------------------------------------------------------
-  // Unit conversion
-  // ---------------------------------------------------------------
-
   function metersToUnit(m) {
     if (m == null) return null;
     return state.unit === "ft" ? m * M_TO_FT : m;
-  }
-  function unitToMeters(v) {
-    return state.unit === "ft" ? v / M_TO_FT : v;
   }
   function formatElev(m) {
     if (m == null) return "—";
@@ -162,12 +159,9 @@
   }
 
   // ---------------------------------------------------------------
-  // Peak icon library — SVG markup keyed for the picker
+  // Peak icon library
   // ---------------------------------------------------------------
-  //
-  // Each icon is a small viewBox-12 SVG that the CSS variables for fill
-  // and stroke colour. The wrapper class (.pin--<key>) lets each style
-  // tune fill/stroke rules (outline vs solid, lines vs polygons).
+
   const peakIcons = {
     triangle: {
       label: "Triangle",
@@ -222,259 +216,402 @@
   }
 
   // ---------------------------------------------------------------
-  // Map setup
+  // MapLibre style construction
   // ---------------------------------------------------------------
+  //
+  // Each entry in `basemaps` returns either a Stadia style URL or an
+  // inline style spec. The inline "hillshade-only" style is the cleanest
+  // poster aesthetic — paper background + pure DEM-derived hillshade,
+  // no labels or roads — and the one we default to.
 
-  const map = L.map("map", {
-    zoomControl: false,
-    attributionControl: false,
-    preferCanvas: true,
-  });
-  L.control.zoom({ position: "topleft" }).addTo(map);
-  map.attributionControl = L.control
-    .attribution({ position: "bottomleft", prefix: false })
-    .addTo(map);
-
-  // Custom pane for the contour overlay so we can blend the contour tiles
-  // with the underlying basemap independently of the user's CSS-filter
-  // tweaks on the base tiles.
-  map.createPane("contour");
-  map.getPane("contour").style.zIndex = 350;
-  map.getPane("contour").classList.add("contour-pane");
-
-  // Base map styles. The user picks one from the "Map style" dropdown.
-  // Each option is a meaningfully different look — clean hillshade, classic
-  // topo (with labels, for users who want them back), satellite, etc. All
-  // bases share zIndex:1 so the contour and road overlays sit above them.
-  const baseLayers = {
-    hillshade: L.tileLayer(
-      "https://server.arcgisonline.com/ArcGIS/rest/services/Elevation/World_Hillshade/MapServer/tile/{z}/{y}/{x}",
-      {
-        maxZoom: 18,
-        zIndex: 1,
-        attribution:
-          'Hillshade © <a href="https://www.esri.com/">Esri</a>, USGS, NOAA',
-      }
-    ),
-    toner: L.tileLayer(
-      "https://tiles.stadiamaps.com/tiles/stamen_toner_background/{z}/{x}/{y}.png" +
-        stadiaKeySuffix(),
-      {
-        maxZoom: 18,
-        zIndex: 1,
-        attribution:
-          'Tiles © <a href="https://stadiamaps.com/">Stadia Maps</a>, ' +
-          '<a href="https://stamen.com/">Stamen Design</a>; ' +
-          'data © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
-      }
-    ),
-    opentopomap: L.tileLayer(
-      "https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png",
-      {
-        maxZoom: 17,
-        subdomains: "abc",
-        zIndex: 1,
-        attribution:
-          '© <a href="https://opentopomap.org/">OpenTopoMap</a> ' +
-          '(<a href="https://creativecommons.org/licenses/by-sa/3.0/">CC-BY-SA</a>), ' +
-          'data © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
-      }
-    ),
-    light: L.tileLayer(
-      "https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}.png",
-      {
-        maxZoom: 19,
-        subdomains: "abcd",
-        zIndex: 1,
-        attribution:
-          'Tiles © <a href="https://carto.com/">CARTO</a>, ' +
-          'data © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-      }
-    ),
-    dark: L.tileLayer(
-      "https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}.png",
-      {
-        maxZoom: 19,
-        subdomains: "abcd",
-        zIndex: 1,
-        attribution:
-          'Tiles © <a href="https://carto.com/">CARTO</a>, ' +
-          'data © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-      }
-    ),
-    satellite: L.tileLayer(
-      "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
-      {
-        maxZoom: 19,
-        zIndex: 1,
-        attribution:
-          'Imagery © <a href="https://www.esri.com/">Esri</a>, Maxar, Earthstar Geographics',
-      }
-    ),
-  };
-
-  // Contour overlay configurations. Stadia is the "purest" (lines-only),
-  // but its tiles require a registered domain or API key for production
-  // sites, so it's no longer the default — OpenTopoMap, blended with
-  // mix-blend-mode multiply, gives a usable contour effect on any host.
-  function stadiaKeySuffix() {
+  function stadiaSuffix() {
     const k = state.style.stadiaKey && state.style.stadiaKey.trim();
     return k ? "?api_key=" + encodeURIComponent(k) : "";
   }
 
-  // NOTE on Stamen terrain layers: `stamen_terrain_lines` is misleadingly
-  // named — it's the OSM line work (roads, state borders, water edges),
-  // NOT contour lines. The actual contour lines live inside the
-  // `stamen_terrain_background` hillshade tile and `stamen_terrain` (full).
-  // We use `stamen_terrain_background` here so the overlay contributes
-  // hillshade + contours together, then mix-blend-mode multiply on the
-  // pane drops the white tile background so it composites cleanly over
-  // whatever basemap the user picked.
-  const contourSources = {
-    opentopo: {
-      label: "OpenTopoMap (no key)",
-      build: () =>
-        L.tileLayer("https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png", {
-          pane: "contour",
-          maxZoom: 17,
-          subdomains: "abc",
-          className: "contour-tile contour-tile--blend",
-          attribution:
-            'Contours © <a href="https://opentopomap.org/">OpenTopoMap</a>',
-        }),
-    },
-    stadia_terrain_bg: {
-      label: "Stamen Terrain — hillshade + contours (Stadia)",
-      build: () =>
-        L.tileLayer(
-          "https://tiles.stadiamaps.com/tiles/stamen_terrain_background/{z}/{x}/{y}.png" +
-            stadiaKeySuffix(),
-          {
-            pane: "contour",
-            maxZoom: 18,
-            className: "contour-tile contour-tile--blend",
-            attribution:
-              'Terrain © <a href="https://stadiamaps.com/">Stadia Maps</a>, ' +
-              '<a href="https://stamen.com/">Stamen Design</a>',
-          }
-        ),
-    },
-    stadia_terrain: {
-      label: "Stamen Terrain — full (Stadia, with labels)",
-      build: () =>
-        L.tileLayer(
-          "https://tiles.stadiamaps.com/tiles/stamen_terrain/{z}/{x}/{y}.png" +
-            stadiaKeySuffix(),
-          {
-            pane: "contour",
-            maxZoom: 18,
-            className: "contour-tile contour-tile--blend",
-            attribution:
-              'Terrain © <a href="https://stadiamaps.com/">Stadia Maps</a>, ' +
-              '<a href="https://stamen.com/">Stamen Design</a>',
-          }
-        ),
-    },
-    usgs: {
-      label: "USGS Topo (US only)",
-      build: () =>
-        L.tileLayer(
-          "https://server.arcgisonline.com/arcgis/rest/services/USA_Topo_Maps/MapServer/tile/{z}/{y}/{x}",
-          {
-            pane: "contour",
-            maxZoom: 16,
-            className: "contour-tile contour-tile--blend",
-            attribution:
-              'USGS Topo © <a href="https://www.esri.com/">Esri</a>',
-          }
-        ),
-    },
-    none: { label: "None", build: () => null },
-  };
-
-  let contourLayer = null;
-  function applyContour() {
-    if (contourLayer) {
-      map.removeLayer(contourLayer);
-      contourLayer = null;
-    }
-    if (!$("opt-contours").checked) return;
-    const cfg = contourSources[state.style.contourSource] || contourSources.opentopo;
-    const layer = cfg.build();
-    if (!layer) return;
-    // Warn the user if Stadia 401s instead of letting the failure be silent.
-    const isStadia = state.style.contourSource.startsWith("stadia");
-    let warned = false;
-    layer.on("tileerror", () => {
-      if (warned) return;
-      warned = true;
-      if (isStadia && !stadiaKeySuffix()) {
-        setStatus("contour: register domain or add Stadia key", "error");
-      } else {
-        setStatus("contour tiles failed", "error");
-      }
-    });
-    layer.setOpacity((+$("opt-contour-density").value || 60) / 100);
-    layer.addTo(map);
-    contourLayer = layer;
+  function stadiaStyleUrl(name) {
+    return "https://tiles.stadiamaps.com/styles/" + name + ".json" + stadiaSuffix();
   }
 
-  const osmLayer = L.tileLayer(
-    "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
-    {
-      maxZoom: 19,
-      opacity: 0.35,
-      zIndex: 3,
-      attribution:
-        '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-    }
-  );
+  function stadiaGlyphsUrl() {
+    // Glyphs/fonts share auth with Stadia tiles. Hosted as PBF per
+    // fontstack+range. Used by every custom style we build so the
+    // contour-label symbol layer always has a font to draw with.
+    return "https://tiles.stadiamaps.com/fonts/{fontstack}/{range}.pbf" + stadiaSuffix();
+  }
 
-  // Each base layer has a perceived tone so pin colors can flip to stay
-  // legible — paper-ink on light bases, ink-paper on dark ones.
-  const baseLayerTones = {
-    hillshade: "light",
-    toner: "light",
-    opentopomap: "light",
-    light: "light",
-    dark: "dark",
-    satellite: "dark",
-    paper: "light",
+  function hillshadeOnlyStyle() {
+    return {
+      version: 8,
+      glyphs: stadiaGlyphsUrl(),
+      sources: {
+        "terrain-dem": {
+          type: "raster-dem",
+          tiles: [DEM_TILES],
+          tileSize: 256,
+          encoding: "terrarium",
+          maxzoom: 13,
+          attribution: DEM_ATTRIBUTION,
+        },
+      },
+      layers: [
+        {
+          id: "background",
+          type: "background",
+          paint: { "background-color": state.style.paperColor },
+        },
+        {
+          id: "hillshade",
+          type: "hillshade",
+          source: "terrain-dem",
+          paint: {
+            "hillshade-shadow-color": "#222",
+            "hillshade-highlight-color": "#fff",
+            "hillshade-accent-color": "#333",
+            "hillshade-exaggeration": state.style.hillshadeStrength / 100,
+            "hillshade-illumination-direction": 315,
+          },
+        },
+      ],
+    };
+  }
+
+  function paperOnlyStyle() {
+    return {
+      version: 8,
+      glyphs: stadiaGlyphsUrl(),
+      sources: {},
+      layers: [
+        {
+          id: "background",
+          type: "background",
+          paint: { "background-color": state.style.paperColor },
+        },
+      ],
+    };
+  }
+
+  function satelliteStyle() {
+    return {
+      version: 8,
+      glyphs: stadiaGlyphsUrl(),
+      sources: {
+        satellite: {
+          type: "raster",
+          tiles: [
+            "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+          ],
+          tileSize: 256,
+          attribution:
+            'Imagery © <a href="https://www.esri.com/">Esri</a>, Maxar, Earthstar Geographics',
+        },
+      },
+      layers: [
+        { id: "background", type: "background", paint: { "background-color": "#000" } },
+        { id: "satellite", type: "raster", source: "satellite" },
+      ],
+    };
+  }
+
+  const basemaps = {
+    "hillshade-only": { label: "Hillshade only", tone: "light", build: hillshadeOnlyStyle },
+    alidade_smooth: { label: "Alidade Smooth", tone: "light", build: () => stadiaStyleUrl("alidade_smooth") },
+    alidade_smooth_dark: { label: "Alidade Smooth Dark", tone: "dark", build: () => stadiaStyleUrl("alidade_smooth_dark") },
+    outdoors: { label: "Outdoors", tone: "light", build: () => stadiaStyleUrl("outdoors") },
+    stamen_toner: { label: "Stamen Toner", tone: "light", build: () => stadiaStyleUrl("stamen_toner") },
+    stamen_toner_lite: { label: "Stamen Toner Lite", tone: "light", build: () => stadiaStyleUrl("stamen_toner_lite") },
+    osm_bright: { label: "OSM Bright", tone: "light", build: () => stadiaStyleUrl("osm_bright") },
+    satellite: { label: "Satellite", tone: "dark", build: satelliteStyle },
+    paper: { label: "Paper only", tone: "light", build: paperOnlyStyle },
   };
 
-  let currentBaseKey = "hillshade";
+  function basemapTone(key) {
+    return (basemaps[key] && basemaps[key].tone) || "light";
+  }
+
+  // ---------------------------------------------------------------
+  // Contour source (maplibre-contour) — generates vector contour
+  // tiles from the DEM source. Re-instantiated whenever the unit
+  // changes so the threshold rounding stays nice.
+  // ---------------------------------------------------------------
+
+  let demSource = null;
+  function makeDemSource() {
+    if (typeof mlcontour === "undefined") {
+      console.warn("maplibre-contour failed to load — contours disabled");
+      return null;
+    }
+    const src = new mlcontour.DemSource({
+      url: DEM_TILES,
+      encoding: "terrarium",
+      maxzoom: 13,
+      worker: true,
+    });
+    src.setupMaplibre(maplibregl);
+    return src;
+  }
+
+  function contourThresholds() {
+    // Threshold pairs are [minor, major] in the user's chosen unit. The
+    // contour plugin scales the elevation values by `multiplier` before
+    // applying these, so we can pick round numbers in feet OR meters
+    // without rebuilding the source.
+    if (state.unit === "ft") {
+      return {
+        9: [1000, 5000],
+        10: [500, 2500],
+        11: [200, 1000],
+        12: [100, 500],
+        13: [50, 200],
+        14: [40, 200],
+        15: [20, 100],
+      };
+    }
+    return {
+      9: [250, 1000],
+      10: [100, 500],
+      11: [50, 250],
+      12: [25, 100],
+      13: [20, 100],
+      14: [10, 50],
+      15: [5, 25],
+    };
+  }
+
+  function contourTileUrl() {
+    if (!demSource) return null;
+    return demSource.contourProtocolUrl({
+      multiplier: state.unit === "ft" ? M_TO_FT : 1,
+      thresholds: contourThresholds(),
+      elevationKey: "ele",
+      levelKey: "level",
+      contourLayer: "contours",
+    });
+  }
+
+  // ---------------------------------------------------------------
+  // Map setup
+  // ---------------------------------------------------------------
+
+  let currentBasemap = state.style.basemap;
+  const initialStyle = basemaps[currentBasemap]
+    ? basemaps[currentBasemap].build()
+    : hillshadeOnlyStyle();
+
+  const map = new maplibregl.Map({
+    container: "map",
+    style: initialStyle,
+    center: [-74.0, 44.2],
+    zoom: 9.5,
+    minZoom: 2,
+    maxZoom: 18,
+    attributionControl: false,
+    preserveDrawingBuffer: true, // needed so the canvas can be captured for print
+    fadeDuration: 200,
+  });
+
+  map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "top-left");
+  map.addControl(new maplibregl.AttributionControl({ compact: false }), "bottom-left");
+
   function setMapTone(key) {
-    const dark = (baseLayerTones[key] || "light") === "dark";
+    const dark = basemapTone(key) === "dark";
     map.getContainer().classList.toggle("map--dark-base", dark);
   }
-  function applyMapStyle(key) {
-    const prev = baseLayers[currentBaseKey];
-    if (prev) map.removeLayer(prev);
-    currentBaseKey = key;
-    const next = baseLayers[key];
-    if (next) next.addTo(map);
-    setMapTone(key);
+  setMapTone(currentBasemap);
+
+  // Add hillshade + contour overlays on top of whichever basemap is loaded.
+  // These run on every `style.load` since `map.setStyle` blows away all
+  // sources and layers.
+  function addCustomLayers() {
+    const styleHasOwnHillshade =
+      currentBasemap === "hillshade-only" || currentBasemap === "satellite" || currentBasemap === "paper";
+
+    // Add a hillshade layer on top of Stadia vector basemaps so any
+    // basemap gets terrain-aware shading. Skip on hillshade-only (already
+    // has one) and on satellite/paper (would obscure the imagery / look
+    // wrong on flat paper).
+    if (!styleHasOwnHillshade && state.style.hillshadeStrength > 0) {
+      if (!map.getSource("terrain-dem")) {
+        map.addSource("terrain-dem", {
+          type: "raster-dem",
+          tiles: [DEM_TILES],
+          tileSize: 256,
+          encoding: "terrarium",
+          maxzoom: 13,
+          attribution: DEM_ATTRIBUTION,
+        });
+      }
+      // Insert beneath labels if the basemap exposes a label layer we
+      // can recognise; otherwise add on top.
+      const beforeLayer = findFirstLabelLayer();
+      map.addLayer(
+        {
+          id: "hillshade-overlay",
+          type: "hillshade",
+          source: "terrain-dem",
+          paint: {
+            "hillshade-shadow-color": "#000",
+            "hillshade-highlight-color": "#fff",
+            "hillshade-accent-color": "#000",
+            "hillshade-exaggeration": state.style.hillshadeStrength / 100,
+            "hillshade-illumination-direction": 315,
+          },
+        },
+        beforeLayer || undefined
+      );
+    }
+
+    // Contours generated client-side from the DEM tiles. Two layers:
+    // line work + optional elevation labels on the major contours.
+    if (state.style.contoursEnabled) {
+      addContourLayers();
+    }
   }
-  baseLayers[currentBaseKey].addTo(map);
-  setMapTone(currentBaseKey);
 
-  const peaksGroup = L.layerGroup().addTo(map);
+  function findFirstLabelLayer() {
+    // Find the first symbol layer (typically a label) so we can insert
+    // overlays beneath it; this keeps place names readable.
+    const layers = map.getStyle().layers || [];
+    for (const ly of layers) {
+      if (ly.type === "symbol") return ly.id;
+    }
+    return null;
+  }
 
-  // Default to ADK High Peaks region — it's where the user is hiking — but
-  // nothing else assumes that. The Region presets jump elsewhere instantly.
-  map.fitBounds([
-    [43.95, -74.30],
-    [44.45, -73.65],
-  ]);
+  function addContourLayers() {
+    if (!demSource) return;
+    if (map.getLayer("contour-lines")) return;
+    if (!map.getSource("contour-source")) {
+      map.addSource("contour-source", {
+        type: "vector",
+        tiles: [contourTileUrl()],
+        maxzoom: 15,
+        attribution: DEM_ATTRIBUTION,
+      });
+    }
+    const dark = basemapTone(currentBasemap) === "dark";
+    const lineColor = dark ? "rgba(246,241,230,0.75)" : "rgba(20,20,20,0.7)";
+    const labelColor = dark ? "rgba(246,241,230,0.95)" : "rgba(20,20,20,0.85)";
+    const haloColor = dark ? "rgba(0,0,0,0.6)" : "rgba(246,241,230,0.85)";
+
+    map.addLayer({
+      id: "contour-lines",
+      type: "line",
+      source: "contour-source",
+      "source-layer": "contours",
+      paint: {
+        "line-color": lineColor,
+        "line-width": ["match", ["get", "level"], 1, 1.0, 0.45],
+        "line-opacity": state.style.contourDensity / 100,
+      },
+    });
+
+    if (state.style.contourLabels) {
+      map.addLayer({
+        id: "contour-labels",
+        type: "symbol",
+        source: "contour-source",
+        "source-layer": "contours",
+        filter: [">", ["get", "level"], 0],
+        layout: {
+          "symbol-placement": "line",
+          "text-size": 10,
+          "text-field": ["concat", ["to-string", ["get", "ele"]], state.unit === "ft" ? "′" : " m"],
+          "text-font": ["Roboto Regular", "Noto Sans Regular"],
+          "text-padding": 6,
+          "text-rotation-alignment": "map",
+          "text-pitch-alignment": "viewport",
+          "text-max-angle": 25,
+        },
+        paint: {
+          "text-color": labelColor,
+          "text-halo-color": haloColor,
+          "text-halo-width": 1.2,
+          "text-opacity": state.style.contourDensity / 100,
+        },
+      });
+    }
+  }
+
+  function removeContourLayers() {
+    if (map.getLayer("contour-labels")) map.removeLayer("contour-labels");
+    if (map.getLayer("contour-lines")) map.removeLayer("contour-lines");
+    if (map.getSource("contour-source")) map.removeSource("contour-source");
+  }
+
+  // ---------------------------------------------------------------
+  // Style switching
+  // ---------------------------------------------------------------
+
+  function applyBasemap(key) {
+    if (!basemaps[key]) return;
+    currentBasemap = key;
+    state.style.basemap = key;
+    setMapTone(key);
+    map.setStyle(basemaps[key].build());
+    // `style.load` will re-add custom layers.
+  }
+
+  function applyPaperColor() {
+    document.documentElement.style.setProperty("--paper", state.style.paperColor);
+    if (map.getLayer("background")) {
+      map.setPaintProperty("background", "background-color", state.style.paperColor);
+    }
+  }
+
+  function applyBlendMap() {
+    const canvas = map.getCanvas();
+    canvas.style.mixBlendMode = state.style.blendMap ? "multiply" : "";
+  }
+
+  function applyCanvasFilter() {
+    const s = $("opt-sat").value;
+    const c = $("opt-con").value;
+    const b = $("opt-bri").value;
+    $("sat-readout").textContent = s + "%";
+    $("con-readout").textContent = c + "%";
+    $("bri-readout").textContent = b + "%";
+    map.getCanvas().style.filter =
+      "grayscale(" + (100 - s) + "%) contrast(" + c + "%) brightness(" + b + "%)";
+  }
+
+  function applyContourEnabled() {
+    if (state.style.contoursEnabled) {
+      addContourLayers();
+    } else {
+      removeContourLayers();
+    }
+  }
+
+  function applyContourDensity() {
+    const op = state.style.contourDensity / 100;
+    if (map.getLayer("contour-lines")) {
+      map.setPaintProperty("contour-lines", "line-opacity", op);
+    }
+    if (map.getLayer("contour-labels")) {
+      map.setPaintProperty("contour-labels", "text-opacity", op);
+    }
+  }
+
+  function applyHillshadeStrength() {
+    const v = state.style.hillshadeStrength / 100;
+    if (map.getLayer("hillshade")) {
+      map.setPaintProperty("hillshade", "hillshade-exaggeration", v);
+    }
+    if (map.getLayer("hillshade-overlay")) {
+      map.setPaintProperty("hillshade-overlay", "hillshade-exaggeration", v);
+    }
+  }
+
+  map.on("style.load", () => {
+    addCustomLayers();
+    applyPaperColor();
+    applyContourDensity();
+  });
 
   // ---------------------------------------------------------------
   // Overpass: fetch peaks for current map view, cell-cached
   // ---------------------------------------------------------------
-  //
-  // Peak data doesn't change with zoom level, so caching by exact bbox+zoom
-  // (the old behaviour) re-fetched the same peaks every time the user
-  // panned or zoomed. Now we snap each request to a coarse grid, cache by
-  // cell, and combine missing cells into a single Overpass query.
 
   function cellKey(s, w, step) {
     return s.toFixed(3) + "/" + w.toFixed(3) + "/" + step;
@@ -486,8 +623,6 @@
     const n0 = Math.ceil(bounds.getNorth() / step) * step;
     const e0 = Math.ceil(bounds.getEast() / step) * step;
     const out = [];
-    // Floating-point drift can leave the loop one cell short if we use
-    // strict `<`, so subtract a small epsilon when comparing.
     const eps = step / 1000;
     for (let lat = s0; lat < n0 - eps; lat += step) {
       for (let lng = w0; lng < e0 - eps; lng += step) {
@@ -504,6 +639,16 @@
     return out;
   }
 
+  function chooseCellsForBounds(bounds, zoom) {
+    let step = gridStep(zoom);
+    let cells = cellsForBounds(bounds, step);
+    while (cells.length > 30) {
+      step *= 2;
+      cells = cellsForBounds(bounds, step);
+    }
+    return { cells, step };
+  }
+
   function parseElev(raw) {
     if (raw == null) return null;
     const s = String(raw).trim();
@@ -511,9 +656,6 @@
     if (!m) return null;
     let v = parseFloat(m[1]);
     if (Number.isNaN(v)) return null;
-    // OSM standard is meters as a plain number. Some entries include units —
-    // be defensive about feet so we don't end up showing 16,000 ft summits
-    // for a peak that's really 1600 m.
     if (/(?:ft|feet|')\s*$/i.test(s)) v = v / M_TO_FT;
     return v;
   }
@@ -573,9 +715,6 @@
     const out = new Map();
     cells.forEach((c) => out.set(c.key, []));
     peaks.forEach((p) => {
-      // A peak technically only belongs to one cell, but the parsed cell
-      // bounds are inclusive so duplicates between adjacent cells are
-      // possible — dedupe by ID at the caller.
       for (const c of cells) {
         if (p.lat >= c.s && p.lat <= c.n && p.lng >= c.w && p.lng <= c.e) {
           out.get(c.key).push(p);
@@ -603,18 +742,21 @@
     const bucketed = bucketPeaksIntoCells(peaks, cells);
     const now = Date.now();
     bucketed.forEach((p, key) => state.cache.set(key, { peaks: p, t: now }));
-    // Mark even empty cells as cached so we don't re-query.
     cells.forEach((c) => {
       if (!state.cache.has(c.key)) state.cache.set(c.key, { peaks: [], t: now });
     });
     return peaks;
   }
 
+  function mapBounds() {
+    // MapLibre's LngLatBounds shares getNorth/South/East/West with Leaflet.
+    return map.getBounds();
+  }
+
   async function fetchPeaks() {
     const zoom = map.getZoom();
-    const bounds = map.getBounds();
+    const bounds = mapBounds();
 
-    // At very low zoom the world has too many peaks to return usefully.
     if (zoom < 7) {
       state.peaks = [];
       render();
@@ -651,7 +793,6 @@
     try {
       const fetched = await fetchCells(missing, ctrl.signal);
       if (mySeq !== state.fetchSeq) return;
-
       const byId = new Map();
       cached.concat(fetched).forEach((p) => byId.set(p.id, p));
       state.peaks = Array.from(byId.values());
@@ -667,8 +808,6 @@
     }
   }
 
-  // Background pre-fetch: after the visible area loads, quietly pull the
-  // ring of cells around it so the next pan in any direction is instant.
   function schedulePrefetch(visibleCells, step) {
     if (state.prefetchTimer) clearTimeout(state.prefetchTimer);
     state.prefetchTimer = setTimeout(() => {
@@ -690,7 +829,6 @@
         (c) => !cachedCellPeaks(c)
       );
       if (!neighbors.length) return;
-      // Cap each prefetch batch so we never blow past Overpass's limits.
       const batch = neighbors.slice(0, 12);
       fetchCells(batch).catch(() => {});
     }, 1800);
@@ -699,12 +837,14 @@
   const fetchPeaksDebounced = debounce(fetchPeaks, 400);
 
   // ---------------------------------------------------------------
-  // Rendering
+  // Rendering — MapLibre Markers
   // ---------------------------------------------------------------
 
-  // All peaks under consideration: live OSM results plus the user's
-  // persisted custom peaks. Custom peaks always travel with the user, no
-  // matter which region of the map is loaded.
+  // Pool of active markers, keyed by peak id. We diff against the new
+  // visible set rather than tearing down every marker on each render so
+  // pan/zoom doesn't churn the DOM.
+  const markers = new Map();
+
   function allPeaks() {
     return state.peaks.concat(state.custom);
   }
@@ -719,12 +859,11 @@
       if (state.excluded.has(p.id)) return false;
       if (requireName && !p.name) return false;
       if (requireEle && p.ele == null) return false;
-      if (p.ele == null) return true; // no-ele peaks pass the range filter
+      if (p.ele == null) return true;
       const v = metersToUnit(p.ele);
       return v >= lo && v <= hi;
     });
 
-    // Sort highest first so top-N keeps the most prominent peaks.
     arr.sort((a, b) => {
       const av = a.ele == null ? -Infinity : a.ele;
       const bv = b.ele == null ? -Infinity : b.ele;
@@ -737,7 +876,7 @@
     return arr;
   }
 
-  function buildMarker(peak, dimmed) {
+  function buildPinElement(peak, dimmed) {
     const nameHtml = peak.name
       ? '<span class="pin__name">' + escapeHtml(peak.name) + "</span>"
       : "";
@@ -754,49 +893,26 @@
         (state.display.showElev ? eleHtml : "") +
         "</span>"
       : "";
-
     const iconKey = iconForKey(state.style.icon);
     const glyph =
       '<span class="pin__glyph pin__glyph--' + iconKey + '">' +
       peakIcons[iconKey].svg +
       "</span>";
 
-    const html =
-      '<div class="pin pin--' + iconKey + " " +
-      (dimmed ? "pin--dim" : "") +
-      '">' +
-      glyph +
-      label +
-      "</div>";
-
-    const icon = L.divIcon({
-      className: "pin-wrap",
-      html: html,
-      iconSize: [0, 0],
-      iconAnchor: [0, 0],
-    });
-    return L.marker([peak.lat, peak.lng], {
-      icon: icon,
-      keyboard: false,
-      interactive: false,
-      zIndexOffset: peak.ele != null ? Math.round(peak.ele) : 0,
-    });
+    const el = document.createElement("div");
+    el.className = "pin pin--" + iconKey + (dimmed ? " pin--dim" : "");
+    el.innerHTML = glyph + label;
+    return el;
   }
 
-  // Greedy label de-cluttering: walk the prominence-sorted list and hide the
-  // label of any pin whose projected pixel position is too close to an already-
-  // shown one. The triangle marker stays so the user still sees every peak.
   function suppressOverlappingLabels(peaks) {
-    const zoom = map.getZoom();
-    // Rough label footprint; tuned for the current pin style (.pin__label is
-    // ~75–90px wide depending on the name, ~28px tall with name + elevation).
     const minSepX = 78;
     const minSepY = 26;
     const placed = [];
     peaks.forEach((p) => {
-      const pt = map.project([p.lat, p.lng], zoom);
+      const pt = map.project([p.lng, p.lat]);
       const collides = placed.some((sp) => {
-        const spt = map.project([sp.lat, sp.lng], zoom);
+        const spt = map.project([sp.lng, sp.lat]);
         return (
           Math.abs(pt.x - spt.x) < minSepX &&
           Math.abs(pt.y - spt.y) < minSepY
@@ -808,30 +924,62 @@
   }
 
   function render() {
-    peaksGroup.clearLayers();
-
     const shown = visiblePeaks();
     suppressOverlappingLabels(shown);
     const shownIds = new Set(shown.map((p) => p.id));
 
-    // Always render shown peaks fully, render others dimmed so the map keeps
-    // its overall composition.
+    const wantedIds = new Set();
+    // Full-strength markers for visible peaks
     shown.forEach((peak) => {
-      buildMarker(peak, false).addTo(peaksGroup);
+      wantedIds.add(peak.id);
+      const el = buildPinElement(peak, false);
+      upsertMarker(peak, el);
     });
+    // Dimmed markers for in-region but filtered-out peaks
     allPeaks().forEach((peak) => {
       if (shownIds.has(peak.id)) return;
       if (state.excluded.has(peak.id)) return;
-      // Render unfiltered peaks faintly only if elevation data exists or names
-      // are present so we don't pollute the map with hundreds of unnamed nodes.
       if (peak.ele == null && !peak.name) return;
-      buildMarker(peak, true).addTo(peaksGroup);
+      wantedIds.add(peak.id);
+      const el = buildPinElement(peak, true);
+      upsertMarker(peak, el);
     });
+
+    // Drop markers that are no longer wanted
+    for (const [id, mk] of markers) {
+      if (!wantedIds.has(id)) {
+        mk.remove();
+        markers.delete(id);
+      }
+    }
 
     updateBadges(shown);
     updatePeakList(shown);
     updateExcludedList();
     updateAutoElevationRange();
+  }
+
+  function upsertMarker(peak, el) {
+    const existing = markers.get(peak.id);
+    if (existing) {
+      // Replace the inner element in-place so we don't churn the
+      // MapLibre marker container (and its DOM position).
+      const container = existing.getElement();
+      container.innerHTML = "";
+      container.appendChild(el);
+      existing.setLngLat([peak.lng, peak.lat]);
+      return;
+    }
+    const wrap = document.createElement("div");
+    wrap.className = "pin-wrap";
+    wrap.appendChild(el);
+    const mk = new maplibregl.Marker({
+      element: wrap,
+      anchor: "bottom",
+    })
+      .setLngLat([peak.lng, peak.lat])
+      .addTo(map);
+    markers.set(peak.id, mk);
   }
 
   function updateBadges(shown) {
@@ -851,9 +999,8 @@
     const tag = p.custom
       ? '<span class="peaklist__tag" title="Custom peak">+</span>'
       : "";
-    const action = opts.action; // { cls, label, title }
-    const cls =
-      "peaklist__item" + (p.custom ? " peaklist__item--custom" : "");
+    const action = opts.action;
+    const cls = "peaklist__item" + (p.custom ? " peaklist__item--custom" : "");
     return (
       '<li class="' + cls + '" ' +
       'data-id="' + escapeHtml(p.id) + '" ' +
@@ -899,10 +1046,7 @@
     list.innerHTML = Array.from(state.excluded)
       .map((id) => {
         const p =
-          byId.get(id) ||
-          // Excluded peak isn't loaded right now (panned away from its
-          // region); show a stub so the user can still restore it.
-          { id: id, name: null, ele: null, lat: 0, lng: 0 };
+          byId.get(id) || { id: id, name: null, ele: null, lat: 0, lng: 0 };
         return renderPeakListItem(p, {
           action: {
             cls: "peaklist__restore",
@@ -913,11 +1057,6 @@
       })
       .join("");
   }
-
-  // ---------------------------------------------------------------
-  // Auto-range the elevation slider to currently loaded peaks so the
-  // handles aren't sitting at extremes the user can't reach.
-  // ---------------------------------------------------------------
 
   function updateAutoElevationRange() {
     const eles = state.peaks
@@ -956,7 +1095,7 @@
   }
 
   // ---------------------------------------------------------------
-  // Geocoding via Nominatim for the search box
+  // Geocoding (Nominatim)
   // ---------------------------------------------------------------
 
   async function searchPlace(q) {
@@ -995,18 +1134,13 @@
     ul.querySelectorAll("button").forEach((b) =>
       b.addEventListener("click", () => {
         const it = items[+b.dataset.idx];
-        // Jumping somewhere new should let the filter auto-range to the new
-        // region's peaks rather than carry over the previous values.
         state.filters.eleMinManual = false;
         state.filters.eleMaxManual = false;
         if (it.boundingbox) {
           const [s, n, w, e] = it.boundingbox.map(parseFloat);
-          map.fitBounds([
-            [s, w],
-            [n, e],
-          ]);
+          map.fitBounds([[w, s], [e, n]], { padding: 40, duration: 400 });
         } else {
-          map.setView([+it.lat, +it.lon], 11);
+          map.flyTo({ center: [+it.lon, +it.lat], zoom: 11, duration: 400 });
         }
         ul.style.display = "none";
         $("search-input").value = it.display_name;
@@ -1015,7 +1149,7 @@
   }
 
   // ---------------------------------------------------------------
-  // Wire up controls
+  // Wiring
   // ---------------------------------------------------------------
 
   function wirePanel() {
@@ -1023,15 +1157,13 @@
       const panel = $("panel");
       const open = panel.classList.toggle("panel--closed") ? false : true;
       e.currentTarget.setAttribute("aria-expanded", open ? "true" : "false");
-      setTimeout(() => map.invalidateSize(), 220);
+      setTimeout(() => map.resize(), 220);
     });
   }
 
   function wireUnits() {
     function setUnit(unit) {
       if (unit === state.unit) return;
-      // Convert current slider values to the new unit so we don't lose the
-      // user's intent.
       const oldMin = state.filters.eleMin;
       const oldMax = state.filters.eleMax;
       const oldUnit = state.unit;
@@ -1040,15 +1172,21 @@
         oldUnit === unit
           ? v
           : oldUnit === "ft"
-          ? v / M_TO_FT // ft -> m
-          : v * M_TO_FT; // m -> ft
+          ? v / M_TO_FT
+          : v * M_TO_FT;
       state.filters.eleMin = conv(oldMin);
       state.filters.eleMax = conv(oldMax);
 
       $("unit-ft").classList.toggle("seg__btn--on", unit === "ft");
       $("unit-m").classList.toggle("seg__btn--on", unit === "m");
-      $("foot-unit").textContent = "elevations in " + (unit === "ft" ? "feet" : "meters");
+      $("foot-unit").textContent =
+        "elevations in " + (unit === "ft" ? "feet" : "meters");
       refreshAddPeakUnit();
+      // Contours are keyed off feet/meters thresholds — rebuild the
+      // source so the new contours fall on round numbers in the chosen
+      // unit instead of a re-scaled meter grid.
+      removeContourLayers();
+      if (state.style.contoursEnabled) addContourLayers();
       render();
     }
     $("unit-ft").addEventListener("click", () => setUnit("ft"));
@@ -1112,24 +1250,9 @@
     });
   }
 
-  // Apply mix-blend-mode multiply to base tiles so the white parts of
-  // hillshade/topo tiles take on the paper colour underneath. This is
-  // what lets the user "make the map match the poster".
-  function applyBlendMap() {
-    const tilePane = map.getPanes().tilePane;
-    tilePane.style.mixBlendMode = state.style.blendMap ? "multiply" : "";
-  }
-
-  function applyPaperColor() {
-    document.documentElement.style.setProperty("--paper", state.style.paperColor);
-  }
-
   function setIconPickerSelection(key) {
     document.querySelectorAll(".icon-picker__opt").forEach((btn) => {
-      btn.classList.toggle(
-        "icon-picker__opt--on",
-        btn.dataset.icon === key
-      );
+      btn.classList.toggle("icon-picker__opt--on", btn.dataset.icon === key);
     });
   }
 
@@ -1140,13 +1263,10 @@
       .map(
         ([key, ic]) =>
           '<button type="button" class="icon-picker__opt pin pin--' +
-          key +
-          '" ' +
-          'data-icon="' + key + '" title="' + escapeHtml(ic.label) + '" ' +
-          'aria-label="' + escapeHtml(ic.label) + '">' +
+          key + '" data-icon="' + key + '" title="' + escapeHtml(ic.label) +
+          '" aria-label="' + escapeHtml(ic.label) + '">' +
           '<span class="pin__glyph pin__glyph--' + key + '">' +
-          ic.svg +
-          "</span></button>"
+          ic.svg + "</span></button>"
       )
       .join("");
     setIconPickerSelection(state.style.icon);
@@ -1162,59 +1282,64 @@
 
   function wireStyle() {
     $("opt-map-style").addEventListener("change", (e) => {
-      applyMapStyle(e.target.value);
-    });
-    $("opt-contours").addEventListener("change", applyContour);
-    $("opt-contour-source").addEventListener("change", (e) => {
-      state.style.contourSource = e.target.value;
-      // Stadia key field is only useful for the Stadia-hosted sources.
-      $("opt-stadia-key-wrap").style.display =
-        state.style.contourSource.startsWith("stadia") ? "" : "none";
+      applyBasemap(e.target.value);
       saveUserData();
-      applyContour();
     });
+
+    $("opt-contours").addEventListener("change", (e) => {
+      state.style.contoursEnabled = e.target.checked;
+      applyContourEnabled();
+      saveUserData();
+    });
+
+    $("opt-contour-density").addEventListener("input", (e) => {
+      state.style.contourDensity = +e.target.value;
+      $("contour-readout").textContent = state.style.contourDensity + "%";
+      applyContourDensity();
+      saveUserData();
+    });
+
+    $("opt-contour-labels").addEventListener("change", (e) => {
+      state.style.contourLabels = e.target.checked;
+      removeContourLayers();
+      if (state.style.contoursEnabled) addContourLayers();
+      saveUserData();
+    });
+
+    $("opt-hillshade").addEventListener("input", (e) => {
+      state.style.hillshadeStrength = +e.target.value;
+      $("hill-readout").textContent = state.style.hillshadeStrength + "%";
+      applyHillshadeStrength();
+      saveUserData();
+    });
+
     $("opt-stadia-key").addEventListener("change", (e) => {
       state.style.stadiaKey = e.target.value.trim();
       saveUserData();
-      applyContour();
+      // Re-apply basemap so the URL picks up the new key.
+      applyBasemap(state.style.basemap);
     });
 
-    $("opt-osm").addEventListener("change", (e) => {
-      if (e.target.checked) osmLayer.addTo(map);
-      else map.removeLayer(osmLayer);
+    $("opt-print-dpi").addEventListener("change", (e) => {
+      state.style.printDpi = +e.target.value;
+      saveUserData();
     });
+
     $("opt-attribution").addEventListener("change", (e) => {
-      if (e.target.checked) map.attributionControl.addTo(map);
-      else map.attributionControl.remove();
+      // MapLibre exposes the control container via the dom; toggle visually.
+      const el = document.querySelector(".maplibregl-ctrl-bottom-left");
+      if (el) el.style.display = e.target.checked ? "" : "none";
     });
+
     $("opt-border").addEventListener("change", (e) => {
       $("poster").classList.toggle("poster--noborder", !e.target.checked);
     });
 
-    const contourSlider = $("opt-contour-density");
-    contourSlider.addEventListener("input", () => {
-      const v = +contourSlider.value;
-      if (contourLayer) contourLayer.setOpacity(v / 100);
-      $("contour-readout").textContent = v + "%";
-    });
-
-    const tilePane = map.getPanes().tilePane;
-    function applyFilters() {
-      const s = $("opt-sat").value;
-      const c = $("opt-con").value;
-      const b = $("opt-bri").value;
-      $("sat-readout").textContent = s + "%";
-      $("con-readout").textContent = c + "%";
-      $("bri-readout").textContent = b + "%";
-      tilePane.style.filter =
-        "grayscale(" + (100 - s) + "%) contrast(" + c + "%) brightness(" + b + "%)";
-    }
     ["opt-sat", "opt-con", "opt-bri"].forEach((id) =>
-      $(id).addEventListener("input", applyFilters)
+      $(id).addEventListener("input", applyCanvasFilter)
     );
-    applyFilters();
+    applyCanvasFilter();
 
-    // Paper color + blend
     const paperInput = $("opt-paper");
     const paperReadout = $("paper-readout");
     paperInput.value = state.style.paperColor;
@@ -1233,6 +1358,17 @@
       applyBlendMap();
       saveUserData();
     });
+
+    // Hydrate map style dropdown + sliders from saved state.
+    $("opt-map-style").value = state.style.basemap;
+    $("opt-contours").checked = state.style.contoursEnabled;
+    $("opt-contour-density").value = state.style.contourDensity;
+    $("contour-readout").textContent = state.style.contourDensity + "%";
+    $("opt-contour-labels").checked = state.style.contourLabels;
+    $("opt-hillshade").value = state.style.hillshadeStrength;
+    $("hill-readout").textContent = state.style.hillshadeStrength + "%";
+    $("opt-print-dpi").value = state.style.printDpi;
+    $("opt-stadia-key").value = state.style.stadiaKey;
   }
 
   function wirePoster() {
@@ -1247,9 +1383,9 @@
     });
     $("aspect").addEventListener("change", (e) => {
       $("poster").dataset.aspect = e.target.value;
-      setTimeout(() => map.invalidateSize(), 80);
+      setTimeout(() => map.resize(), 80);
     });
-    $("print").addEventListener("click", () => window.print());
+    $("print").addEventListener("click", printPoster);
   }
 
   function wireSearch() {
@@ -1296,14 +1432,8 @@
     document.querySelectorAll(".preset").forEach((b) => {
       b.addEventListener("click", () => {
         const [s, w, n, e] = b.dataset.bounds.split(",").map(parseFloat);
-        // Reset the filter so the new region's peaks aren't dimmed by
-        // values that made sense for a different range.
         resetElevationFilter();
-        map.fitBounds([
-          [s, w],
-          [n, e],
-        ]);
-        // Suggest a sensible title without forcing it on the user.
+        map.fitBounds([[w, s], [e, n]], { padding: 40, duration: 500 });
         const cur = $("poster-title").value;
         if (cur === "High Peaks" || !cur) {
           $("poster-title").value = b.dataset.label;
@@ -1318,7 +1448,7 @@
     let highlight = null;
     function clearHighlight() {
       if (highlight) {
-        map.removeLayer(highlight);
+        highlight.remove();
         highlight = null;
       }
     }
@@ -1328,13 +1458,11 @@
       const lat = +li.dataset.lat;
       const lng = +li.dataset.lng;
       clearHighlight();
-      highlight = L.circleMarker([lat, lng], {
-        radius: 14,
-        color: "#000",
-        weight: 2,
-        fillColor: "#ffd400",
-        fillOpacity: 0.6,
-      }).addTo(map);
+      const el = document.createElement("div");
+      el.className = "peak-highlight";
+      highlight = new maplibregl.Marker({ element: el })
+        .setLngLat([lng, lat])
+        .addTo(map);
     });
     list.addEventListener("mouseout", (e) => {
       if (!e.relatedTarget || !e.relatedTarget.closest(".peaklist")) {
@@ -1342,7 +1470,6 @@
       }
     });
     list.addEventListener("click", (e) => {
-      // Hide button — intercept before the row's fly-to handler runs.
       if (e.target.classList.contains("peaklist__hide")) {
         e.stopPropagation();
         const li = e.target.closest(".peaklist__item");
@@ -1357,10 +1484,13 @@
       if (!li) return;
       const lat = +li.dataset.lat;
       const lng = +li.dataset.lng;
-      map.flyTo([lat, lng], Math.max(map.getZoom(), 13), { duration: 0.5 });
+      map.flyTo({
+        center: [lng, lat],
+        zoom: Math.max(map.getZoom(), 13),
+        duration: 600,
+      });
     });
 
-    // Restore button in the Excluded list.
     $("excluded-peaklist").addEventListener("click", (e) => {
       if (!e.target.classList.contains("peaklist__restore")) return;
       const li = e.target.closest(".peaklist__item");
@@ -1371,9 +1501,9 @@
     });
   }
 
-  // -----------------------------------------------------------------
-  // Custom peaks — entered by coordinates in the side panel.
-  // -----------------------------------------------------------------
+  // ---------------------------------------------------------------
+  // Custom peaks
+  // ---------------------------------------------------------------
 
   function addCustomPeak({ name, eleM, lat, lng }) {
     const peak = {
@@ -1446,8 +1576,6 @@
         }
       }
       addCustomPeak({ name, eleM, lat, lng });
-      // Clear name + elevation, but keep the lat/lng since the user is
-      // probably entering several nearby peaks.
       nameInput.value = "";
       eleInput.value = "";
       nameInput.focus();
@@ -1459,8 +1587,121 @@
     const lat = Math.abs(c.lat).toFixed(2) + "°" + (c.lat >= 0 ? "N" : "S");
     const lng = Math.abs(c.lng).toFixed(2) + "°" + (c.lng >= 0 ? "E" : "W");
     $("foot-coord").textContent = lat + " " + lng;
-    $("foot-scale").textContent = "z" + map.getZoom();
-    $("chip-zoom").textContent = "z" + map.getZoom();
+    const z = map.getZoom();
+    $("foot-scale").textContent = "z" + z.toFixed(1);
+    $("chip-zoom").textContent = "z" + z.toFixed(1);
+  }
+
+  // ---------------------------------------------------------------
+  // High-DPI print export
+  // ---------------------------------------------------------------
+  //
+  // MapLibre's pixelRatio is fixed at construction time and the
+  // displayed canvas is sized to devicePixelRatio. For a high-DPI print
+  // we spin up a hidden Map at our chosen pixelRatio, wait for it to
+  // settle, capture its canvas as a PNG dataURL, then overlay that image
+  // on top of the live map for the duration of the print so the printer
+  // receives the high-resolution version. Markers are CSS overlays, so
+  // they print crisply at the system's print DPI without special handling.
+
+  async function printPoster() {
+    const dpi = state.style.printDpi || 1;
+    const mapEl = $("map");
+    if (!mapEl) return window.print();
+
+    if (dpi <= 1) {
+      // Fast path — no resampling needed.
+      window.print();
+      return;
+    }
+
+    setStatus("preparing print @ " + dpi + "×…", "loading");
+    const width = mapEl.offsetWidth;
+    const height = mapEl.offsetHeight;
+
+    let img = null;
+    let printMap = null;
+    let container = null;
+    try {
+      container = document.createElement("div");
+      container.style.cssText =
+        "position:fixed;left:-99999px;top:-99999px;width:" +
+        width + "px;height:" + height + "px;";
+      document.body.appendChild(container);
+
+      const style = JSON.parse(JSON.stringify(map.getStyle()));
+      printMap = new maplibregl.Map({
+        container: container,
+        style: style,
+        center: map.getCenter(),
+        zoom: map.getZoom(),
+        bearing: map.getBearing(),
+        pitch: map.getPitch(),
+        interactive: false,
+        attributionControl: false,
+        pixelRatio: dpi,
+        preserveDrawingBuffer: true,
+        fadeDuration: 0,
+      });
+
+      await new Promise((resolve, reject) => {
+        let done = false;
+        const timeout = setTimeout(() => {
+          if (!done) reject(new Error("print map load timed out"));
+        }, 15000);
+        printMap.once("idle", () => {
+          done = true;
+          clearTimeout(timeout);
+          resolve();
+        });
+      });
+
+      const dataUrl = printMap.getCanvas().toDataURL("image/png");
+
+      img = document.createElement("img");
+      img.src = dataUrl;
+      img.className = "poster__map-print";
+      img.style.cssText =
+        "position:absolute;inset:0;width:100%;height:100%;" +
+        "pointer-events:none;z-index:1;object-fit:cover;";
+      mapEl.appendChild(img);
+      // Hide the live canvas while the print snapshot is up so the
+      // browser doesn't include both in the print buffer.
+      mapEl.classList.add("printing");
+
+      // Let the image paint before triggering print.
+      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+
+      // Cleanup runs on `afterprint` so the snapshot stays in place for
+      // the full duration of the print dialog/preview — `window.print()`
+      // returns immediately in Chrome/Firefox while the dialog is still
+      // open, so a plain setTimeout would yank the snapshot too early.
+      // setTimeout is the safety net in case afterprint never fires
+      // (e.g. user navigates away mid-print).
+      const cleanup = () => {
+        if (cleanup._ran) return;
+        cleanup._ran = true;
+        if (img && img.parentNode) img.parentNode.removeChild(img);
+        if (mapEl) mapEl.classList.remove("printing");
+        if (printMap) printMap.remove();
+        if (container && container.parentNode) container.parentNode.removeChild(container);
+        setStatus("ready", "ready");
+      };
+      window.addEventListener("afterprint", cleanup, { once: true });
+      setTimeout(cleanup, 60000);
+
+      setStatus("printing…", "ready");
+      window.print();
+    } catch (err) {
+      console.error("High-DPI print failed:", err);
+      setStatus("print fallback (screen DPI)", "error");
+      // Clean up partial state, then fall back to a plain print.
+      if (img && img.parentNode) img.parentNode.removeChild(img);
+      if (mapEl) mapEl.classList.remove("printing");
+      if (printMap) printMap.remove();
+      if (container && container.parentNode) container.parentNode.removeChild(container);
+      window.print();
+    }
   }
 
   // ---------------------------------------------------------------
@@ -1469,15 +1710,11 @@
 
   loadUserData();
 
-  // Hydrate persisted style choices into the DOM before any wiring runs.
-  applyPaperColor();
-  if ($("opt-contour-source")) $("opt-contour-source").value = state.style.contourSource;
-  if ($("opt-stadia-key")) $("opt-stadia-key").value = state.style.stadiaKey;
-  if ($("opt-stadia-key-wrap")) {
-    $("opt-stadia-key-wrap").style.display =
-      state.style.contourSource.startsWith("stadia") ? "" : "none";
-  }
+  // Build the DEM source once, before the map's first style.load fires,
+  // so the contour protocol handler is registered and ready.
+  demSource = makeDemSource();
 
+  applyPaperColor();
   buildIconPicker();
 
   wirePanel();
@@ -1490,10 +1727,15 @@
   wirePeakList();
   wireCustomPeaks();
 
-  // Contours/blend depend on persisted style state — apply after wiring so
-  // the layer matches the dropdown the user actually sees.
-  applyContour();
   applyBlendMap();
+
+  map.on("load", () => {
+    // The initial style is already loaded by now; ensure custom layers
+    // (overlay hillshade + contours) are in place if the initial basemap
+    // wants them. style.load handles subsequent style swaps.
+    applyContourEnabled();
+    fetchPeaks();
+  });
 
   map.on("moveend", () => {
     updateFooter();
@@ -1501,14 +1743,20 @@
   });
   map.on("zoomend", () => {
     updateFooter();
-    // Pixel separation between peaks changes with zoom, so the collision
-    // map has to be rebuilt to keep labels readable.
     render();
   });
-  window.addEventListener("resize", () => map.invalidateSize());
+  window.addEventListener("resize", () => map.resize());
 
-  // Initial run.
+  // Initial UI hydration
   updateFooter();
   updateElevReadout();
-  fetchPeaks();
+
+  // ADK High Peaks default view — matches the original Leaflet boot.
+  map.fitBounds(
+    [
+      [-74.30, 43.95],
+      [-73.65, 44.45],
+    ],
+    { padding: 20, duration: 0 }
+  );
 })();
