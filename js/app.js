@@ -107,27 +107,83 @@
     .attribution({ position: "bottomleft", prefix: false })
     .addTo(map);
 
-  // Hillshade base — clean shaded relief with no baked-in labels or elevations.
-  // OpenTopoMap (used previously) burns OSM place names and meter elevations
-  // into the tile image, which collide with our own peak labels and force the
-  // user's unit preference to be ignored.
-  const hillshadeLayer = L.tileLayer(
-    "https://server.arcgisonline.com/ArcGIS/rest/services/Elevation/World_Hillshade/MapServer/tile/{z}/{y}/{x}",
-    {
-      maxZoom: 18,
-      attribution:
-        'Hillshade tiles © <a href="https://www.esri.com/">Esri</a> — Source: Esri, USGS, NOAA',
-    }
-  );
-  // Contour overlay: Stamen Terrain Lines (via Stadia). This layer is purely
-  // topographic lines — no place names, no elevations baked into the tile —
-  // which is exactly what the poster wants. Opacity is user-controllable so
-  // the density of lines can be dialed up or down.
+  // Base map styles. The user picks one from the "Map style" dropdown.
+  // Each option is a meaningfully different look — clean hillshade, classic
+  // topo (with labels, for users who want them back), satellite, etc. All
+  // bases share zIndex:1 so the contour and road overlays sit above them.
+  const baseLayers = {
+    hillshade: L.tileLayer(
+      "https://server.arcgisonline.com/ArcGIS/rest/services/Elevation/World_Hillshade/MapServer/tile/{z}/{y}/{x}",
+      {
+        maxZoom: 18,
+        zIndex: 1,
+        attribution:
+          'Hillshade © <a href="https://www.esri.com/">Esri</a>, USGS, NOAA',
+      }
+    ),
+    toner: L.tileLayer(
+      "https://tiles.stadiamaps.com/tiles/stamen_toner_background/{z}/{x}/{y}.png",
+      {
+        maxZoom: 18,
+        zIndex: 1,
+        attribution:
+          'Tiles © <a href="https://stadiamaps.com/">Stadia Maps</a>, ' +
+          '<a href="https://stamen.com/">Stamen Design</a>; ' +
+          'data © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+      }
+    ),
+    opentopomap: L.tileLayer(
+      "https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png",
+      {
+        maxZoom: 17,
+        subdomains: "abc",
+        zIndex: 1,
+        attribution:
+          '© <a href="https://opentopomap.org/">OpenTopoMap</a> ' +
+          '(<a href="https://creativecommons.org/licenses/by-sa/3.0/">CC-BY-SA</a>), ' +
+          'data © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+      }
+    ),
+    light: L.tileLayer(
+      "https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}.png",
+      {
+        maxZoom: 19,
+        subdomains: "abcd",
+        zIndex: 1,
+        attribution:
+          'Tiles © <a href="https://carto.com/">CARTO</a>, ' +
+          'data © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+      }
+    ),
+    dark: L.tileLayer(
+      "https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}.png",
+      {
+        maxZoom: 19,
+        subdomains: "abcd",
+        zIndex: 1,
+        attribution:
+          'Tiles © <a href="https://carto.com/">CARTO</a>, ' +
+          'data © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+      }
+    ),
+    satellite: L.tileLayer(
+      "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+      {
+        maxZoom: 19,
+        zIndex: 1,
+        attribution:
+          'Imagery © <a href="https://www.esri.com/">Esri</a>, Maxar, Earthstar Geographics',
+      }
+    ),
+  };
+
+  // Contour overlay: purely topographic lines, no labels.
   const contourLayer = L.tileLayer(
     "https://tiles.stadiamaps.com/tiles/stamen_terrain_lines/{z}/{x}/{y}.png",
     {
       maxZoom: 18,
       opacity: 0.6,
+      zIndex: 2,
       attribution:
         'Contours © <a href="https://stadiamaps.com/">Stadia Maps</a>, ' +
         '<a href="https://stamen.com/">Stamen Design</a>; ' +
@@ -139,11 +195,21 @@
     {
       maxZoom: 19,
       opacity: 0.35,
+      zIndex: 3,
       attribution:
         '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
     }
   );
-  hillshadeLayer.addTo(map);
+
+  let currentBaseKey = "hillshade";
+  function applyMapStyle(key) {
+    const prev = baseLayers[currentBaseKey];
+    if (prev) map.removeLayer(prev);
+    currentBaseKey = key;
+    const next = baseLayers[key];
+    if (next) next.addTo(map);
+  }
+  baseLayers[currentBaseKey].addTo(map);
   contourLayer.addTo(map);
 
   const peaksGroup = L.layerGroup().addTo(map);
@@ -630,9 +696,8 @@
   }
 
   function wireStyle() {
-    $("opt-topo").addEventListener("change", (e) => {
-      if (e.target.checked) hillshadeLayer.addTo(map);
-      else map.removeLayer(hillshadeLayer);
+    $("opt-map-style").addEventListener("change", (e) => {
+      applyMapStyle(e.target.value);
     });
     $("opt-contours").addEventListener("change", (e) => {
       if (e.target.checked) contourLayer.addTo(map);
