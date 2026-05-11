@@ -26,10 +26,12 @@
 
   const state = {
     unit: "ft", // "ft" | "m"
-    peaks: [], // current rendered set
+    peaks: [], // current rendered set from Overpass
     cache: new Map(), // bboxKey -> peak[]
     fetchSeq: 0, // race-condition guard
     inflight: null, // AbortController
+    custom: [], // user-added peaks, persisted to localStorage
+    excluded: new Set(), // peak IDs (OSM or custom) the user has hidden
     filters: {
       eleMin: 0,
       eleMax: 9000,
@@ -45,6 +47,35 @@
       border: true,
     },
   };
+
+  const USER_DATA_KEY = "pbpg.user";
+
+  function loadUserData() {
+    try {
+      const raw = localStorage.getItem(USER_DATA_KEY);
+      if (!raw) return;
+      const data = JSON.parse(raw);
+      if (Array.isArray(data.custom)) state.custom = data.custom;
+      if (Array.isArray(data.excluded)) state.excluded = new Set(data.excluded);
+    } catch (e) {
+      // Corrupt storage shouldn't break the app — just log and move on.
+      console.warn("Could not load user data:", e);
+    }
+  }
+
+  function saveUserData() {
+    try {
+      localStorage.setItem(
+        USER_DATA_KEY,
+        JSON.stringify({
+          custom: state.custom,
+          excluded: Array.from(state.excluded),
+        })
+      );
+    } catch (e) {
+      console.warn("Could not save user data:", e);
+    }
+  }
 
   // ---------------------------------------------------------------
   // DOM helpers
@@ -201,15 +232,33 @@
     }
   );
 
+  // Each base layer has a perceived tone so pin colors can flip to stay
+  // legible — paper-ink on light bases, ink-paper on dark ones.
+  const baseLayerTones = {
+    hillshade: "light",
+    toner: "light",
+    opentopomap: "light",
+    light: "light",
+    dark: "dark",
+    satellite: "dark",
+    paper: "light",
+  };
+
   let currentBaseKey = "hillshade";
+  function setMapTone(key) {
+    const dark = (baseLayerTones[key] || "light") === "dark";
+    map.getContainer().classList.toggle("map--dark-base", dark);
+  }
   function applyMapStyle(key) {
     const prev = baseLayers[currentBaseKey];
     if (prev) map.removeLayer(prev);
     currentBaseKey = key;
     const next = baseLayers[key];
     if (next) next.addTo(map);
+    setMapTone(key);
   }
   baseLayers[currentBaseKey].addTo(map);
+  setMapTone(currentBaseKey);
   contourLayer.addTo(map);
 
   const peaksGroup = L.layerGroup().addTo(map);
@@ -351,13 +400,21 @@
   // Rendering
   // ---------------------------------------------------------------
 
+  // All peaks under consideration: live OSM results plus the user's
+  // persisted custom peaks. Custom peaks always travel with the user, no
+  // matter which region of the map is loaded.
+  function allPeaks() {
+    return state.peaks.concat(state.custom);
+  }
+
   function visiblePeaks() {
     const lo = state.filters.eleMin;
     const hi = state.filters.eleMax;
     const requireName = state.filters.requireName;
     const requireEle = state.filters.requireEle;
 
-    let arr = state.peaks.filter((p) => {
+    let arr = allPeaks().filter((p) => {
+      if (state.excluded.has(p.id)) return false;
       if (requireName && !p.name) return false;
       if (requireEle && p.ele == null) return false;
       if (p.ele == null) return true; // no-ele peaks pass the range filter
@@ -396,9 +453,17 @@
         "</span>"
       : "";
 
+    // SVG triangle — fill/stroke are owned by CSS so they can flip when
+    // the basemap tone changes.
+    const tri =
+      '<svg class="pin__tri" viewBox="0 0 12 11" aria-hidden="true">' +
+      '<polygon points="6,1 11,10 1,10" ' +
+      'stroke-width="0.9" stroke-linejoin="round"/>' +
+      "</svg>";
+
     const html =
       '<div class="pin ' + (dimmed ? "pin--dim" : "") + '">' +
-      '<span class="pin__tri" aria-hidden="true"></span>' +
+      tri +
       label +
       "</div>";
 
@@ -452,8 +517,9 @@
     shown.forEach((peak) => {
       buildMarker(peak, false).addTo(peaksGroup);
     });
-    state.peaks.forEach((peak) => {
+    allPeaks().forEach((peak) => {
       if (shownIds.has(peak.id)) return;
+      if (state.excluded.has(peak.id)) return;
       // Render unfiltered peaks faintly only if elevation data exists or names
       // are present so we don't pollute the map with hundreds of unnamed nodes.
       if (peak.ele == null && !peak.name) return;
@@ -462,6 +528,7 @@
 
     updateBadges(shown);
     updatePeakList(shown);
+    updateExcludedList();
     updateAutoElevationRange();
   }
 
@@ -469,6 +536,34 @@
     $("chip-peaks").textContent =
       shown.length + " peak" + (shown.length === 1 ? "" : "s");
     $("badge-peaks").textContent = String(shown.length);
+  }
+
+  function renderPeakListItem(p, opts) {
+    const name = p.name
+      ? escapeHtml(p.name)
+      : '<em class="peaklist__unnamed">unnamed</em>';
+    const ele =
+      p.ele != null
+        ? '<span class="peaklist__ele">' + formatElev(p.ele) + "</span>"
+        : '<span class="peaklist__ele peaklist__ele--missing">—</span>';
+    const tag = p.custom
+      ? '<span class="peaklist__tag" title="Custom peak">+</span>'
+      : "";
+    const action = opts.action; // { cls, label, title }
+    const cls =
+      "peaklist__item" + (p.custom ? " peaklist__item--custom" : "");
+    return (
+      '<li class="' + cls + '" ' +
+      'data-id="' + escapeHtml(p.id) + '" ' +
+      'data-lat="' + p.lat + '" data-lng="' + p.lng + '">' +
+      '<span class="peaklist__name">' + tag + name + "</span>" +
+      ele +
+      '<button type="button" class="' + action.cls + '" ' +
+      'aria-label="' + action.title + '" title="' + action.title + '">' +
+      action.label +
+      "</button>" +
+      "</li>"
+    );
   }
 
   function updatePeakList(shown) {
@@ -479,21 +574,40 @@
       return;
     }
     list.innerHTML = shown
-      .map((p) => {
-        const name = p.name
-          ? escapeHtml(p.name)
-          : '<em class="peaklist__unnamed">unnamed</em>';
-        const ele =
-          p.ele != null
-            ? '<span class="peaklist__ele">' + formatElev(p.ele) + "</span>"
-            : '<span class="peaklist__ele peaklist__ele--missing">—</span>';
-        return (
-          '<li class="peaklist__item" ' +
-          'data-lat="' + p.lat + '" data-lng="' + p.lng + '">' +
-          '<span class="peaklist__name">' + name + "</span>" +
-          ele +
-          "</li>"
-        );
+      .map((p) =>
+        renderPeakListItem(p, {
+          action: { cls: "peaklist__hide", label: "✕", title: "Hide peak" },
+        })
+      )
+      .join("");
+  }
+
+  function updateExcludedList() {
+    const wrap = $("excluded-wrap");
+    const list = $("excluded-peaklist");
+    const count = state.excluded.size;
+    $("badge-excluded").textContent = String(count);
+    if (count === 0) {
+      wrap.style.display = "none";
+      return;
+    }
+    wrap.style.display = "";
+    const byId = new Map();
+    allPeaks().forEach((p) => byId.set(p.id, p));
+    list.innerHTML = Array.from(state.excluded)
+      .map((id) => {
+        const p =
+          byId.get(id) ||
+          // Excluded peak isn't loaded right now (panned away from its
+          // region); show a stub so the user can still restore it.
+          { id: id, name: null, ele: null, lat: 0, lng: 0 };
+        return renderPeakListItem(p, {
+          action: {
+            cls: "peaklist__restore",
+            label: "↺",
+            title: "Restore peak",
+          },
+        });
       })
       .join("");
   }
@@ -632,6 +746,7 @@
       $("unit-ft").classList.toggle("seg__btn--on", unit === "ft");
       $("unit-m").classList.toggle("seg__btn--on", unit === "m");
       $("foot-unit").textContent = "elevations in " + (unit === "ft" ? "feet" : "meters");
+      refreshAddPeakUnit();
       render();
     }
     $("unit-ft").addEventListener("click", () => setUnit("ft"));
@@ -820,12 +935,18 @@
   function wirePeakList() {
     const list = $("peaklist");
     let highlight = null;
+    function clearHighlight() {
+      if (highlight) {
+        map.removeLayer(highlight);
+        highlight = null;
+      }
+    }
     list.addEventListener("mouseover", (e) => {
       const li = e.target.closest(".peaklist__item");
       if (!li) return;
       const lat = +li.dataset.lat;
       const lng = +li.dataset.lng;
-      if (highlight) map.removeLayer(highlight);
+      clearHighlight();
       highlight = L.circleMarker([lat, lng], {
         radius: 14,
         color: "#000",
@@ -836,18 +957,119 @@
     });
     list.addEventListener("mouseout", (e) => {
       if (!e.relatedTarget || !e.relatedTarget.closest(".peaklist")) {
-        if (highlight) {
-          map.removeLayer(highlight);
-          highlight = null;
-        }
+        clearHighlight();
       }
     });
     list.addEventListener("click", (e) => {
+      // Hide button — intercept before the row's fly-to handler runs.
+      if (e.target.classList.contains("peaklist__hide")) {
+        e.stopPropagation();
+        const li = e.target.closest(".peaklist__item");
+        if (!li) return;
+        state.excluded.add(li.dataset.id);
+        saveUserData();
+        clearHighlight();
+        render();
+        return;
+      }
       const li = e.target.closest(".peaklist__item");
       if (!li) return;
       const lat = +li.dataset.lat;
       const lng = +li.dataset.lng;
       map.flyTo([lat, lng], Math.max(map.getZoom(), 13), { duration: 0.5 });
+    });
+
+    // Restore button in the Excluded list.
+    $("excluded-peaklist").addEventListener("click", (e) => {
+      if (!e.target.classList.contains("peaklist__restore")) return;
+      const li = e.target.closest(".peaklist__item");
+      if (!li) return;
+      state.excluded.delete(li.dataset.id);
+      saveUserData();
+      render();
+    });
+  }
+
+  // -----------------------------------------------------------------
+  // Custom peaks — entered by coordinates in the side panel.
+  // -----------------------------------------------------------------
+
+  function addCustomPeak({ name, eleM, lat, lng }) {
+    const peak = {
+      id:
+        "custom/" +
+        Date.now().toString(36) +
+        "-" +
+        Math.random().toString(36).slice(2, 7),
+      name: name,
+      ele: eleM,
+      lat: lat,
+      lng: lng,
+      kind: "peak",
+      wiki: null,
+      custom: true,
+    };
+    state.custom.push(peak);
+    saveUserData();
+    render();
+  }
+
+  function refreshAddPeakUnit() {
+    const el = $("ap-unit");
+    if (el) el.textContent = state.unit;
+  }
+
+  function wireCustomPeaks() {
+    const form = $("add-peak-form");
+    if (!form) return;
+    const nameInput = $("ap-name");
+    const eleInput = $("ap-ele");
+    const latInput = $("ap-lat");
+    const lngInput = $("ap-lng");
+    const errEl = $("ap-error");
+
+    refreshAddPeakUnit();
+
+    function showError(msg) {
+      if (!errEl) return;
+      errEl.textContent = msg || "";
+      errEl.style.display = msg ? "" : "none";
+    }
+
+    $("ap-center").addEventListener("click", () => {
+      const c = map.getCenter();
+      latInput.value = c.lat.toFixed(6);
+      lngInput.value = c.lng.toFixed(6);
+      nameInput.focus();
+    });
+
+    form.addEventListener("submit", (e) => {
+      e.preventDefault();
+      showError("");
+      const name = nameInput.value.trim();
+      if (!name) return showError("Name is required.");
+      const lat = parseFloat(latInput.value);
+      if (!Number.isFinite(lat) || lat < -90 || lat > 90) {
+        return showError("Latitude must be between -90 and 90.");
+      }
+      const lng = parseFloat(lngInput.value);
+      if (!Number.isFinite(lng) || lng < -180 || lng > 180) {
+        return showError("Longitude must be between -180 and 180.");
+      }
+      let eleM = null;
+      const eleRaw = eleInput.value.trim();
+      if (eleRaw !== "") {
+        const v = parseFloat(eleRaw);
+        if (Number.isFinite(v)) {
+          eleM = state.unit === "ft" ? v / M_TO_FT : v;
+        }
+      }
+      addCustomPeak({ name, eleM, lat, lng });
+      // Clear name + elevation, but keep the lat/lng since the user is
+      // probably entering several nearby peaks.
+      nameInput.value = "";
+      eleInput.value = "";
+      nameInput.focus();
     });
   }
 
@@ -864,6 +1086,8 @@
   // Boot
   // ---------------------------------------------------------------
 
+  loadUserData();
+
   wirePanel();
   wireUnits();
   wireFilters();
@@ -872,6 +1096,7 @@
   wireSearch();
   wirePresets();
   wirePeakList();
+  wireCustomPeaks();
 
   map.on("moveend", () => {
     updateFooter();
