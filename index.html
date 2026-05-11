@@ -222,10 +222,70 @@
                   each style further.
                 </p>
               </label>
+
+              <label class="field">
+                <span class="field__label">Peak icon</span>
+                <div class="icon-picker" id="icon-picker"></div>
+                <p class="field__hint">
+                  Classic topo symbols — pick what matches the poster's mood.
+                </p>
+              </label>
+
+              <label class="field">
+                <span class="field__label">Paper color</span>
+                <div class="color-row">
+                  <input type="color" id="opt-paper" value="#f6f1e6" />
+                  <span class="field__value" id="paper-readout">#f6f1e6</span>
+                </div>
+                <p class="field__hint">
+                  Sets the poster background and the map's untiled areas.
+                </p>
+              </label>
+              <label class="check">
+                <input type="checkbox" id="opt-blend-map" />
+                <span>Blend basemap into paper (multiply)</span>
+              </label>
+
               <label class="check">
                 <input type="checkbox" id="opt-contours" checked />
-                <span>Contour lines overlay</span>
+                <span>Contour overlay</span>
               </label>
+              <label class="field">
+                <span class="field__label">Contour source</span>
+                <select id="opt-contour-source">
+                  <option value="opentopo" selected>
+                    OpenTopoMap (no key)
+                  </option>
+                  <option value="stadia_terrain_bg">
+                    Stamen Terrain — hillshade + contours (Stadia)
+                  </option>
+                  <option value="stadia_terrain">
+                    Stamen Terrain — full (Stadia, with labels)
+                  </option>
+                  <option value="usgs">USGS Topo (US only)</option>
+                  <option value="none">None</option>
+                </select>
+                <p class="field__hint">
+                  Stadia's <code>stamen_terrain_lines</code> is actually roads/borders,
+                  not contours — use the terrain background or OpenTopoMap.
+                </p>
+              </label>
+              <div class="field" id="opt-stadia-key-wrap" style="display: none">
+                <label class="field">
+                  <span class="field__label">Stadia API key (optional)</span>
+                  <input
+                    type="text"
+                    id="opt-stadia-key"
+                    placeholder="leave blank if domain is authorized"
+                    autocomplete="off"
+                    spellcheck="false"
+                  />
+                  <p class="field__hint">
+                    Only needed if the host domain isn't registered with
+                    Stadia Maps.
+                  </p>
+                </label>
+              </div>
               <label class="field">
                 <span class="field__label">
                   Contour density
@@ -238,11 +298,8 @@
                   max="100"
                   value="60"
                 />
-                <p class="field__hint">
-                  Topographic lines only — no place names. Slide down for a
-                  cleaner poster, up for denser detail.
-                </p>
               </label>
+
               <label class="check">
                 <input type="checkbox" id="opt-osm" />
                 <span>Add road / water overlay</span>

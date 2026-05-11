@@ -24,12 +24,38 @@
 
   const M_TO_FT = 3.28084;
 
+  // Peaks are cached by grid cell so panning across the same region is
+  // instant and we don't make the same Overpass request twice. Cell size
+  // varies by zoom to keep the per-fetch payload reasonable.
+  const PEAK_CACHE_TTL_MS = 12 * 60 * 60 * 1000; // 12 h — keeps long sessions snappy
+
+  function gridStep(zoom) {
+    if (zoom <= 8) return 1.0;
+    if (zoom <= 10) return 0.5;
+    if (zoom <= 12) return 0.25;
+    return 0.1;
+  }
+
+  // Pick the coarsest grid step that keeps the per-fetch cell count below
+  // a safe ceiling so a wide low-zoom viewport doesn't kick off a 100-cell
+  // Overpass query.
+  function chooseCellsForBounds(bounds, zoom) {
+    let step = gridStep(zoom);
+    let cells = cellsForBounds(bounds, step);
+    while (cells.length > 30) {
+      step *= 2;
+      cells = cellsForBounds(bounds, step);
+    }
+    return { cells, step };
+  }
+
   const state = {
     unit: "ft", // "ft" | "m"
     peaks: [], // current rendered set from Overpass
-    cache: new Map(), // bboxKey -> peak[]
+    cache: new Map(), // cellKey -> { peaks, t }
     fetchSeq: 0, // race-condition guard
     inflight: null, // AbortController
+    prefetchTimer: null, // debounced neighbor prefetch
     custom: [], // user-added peaks, persisted to localStorage
     excluded: new Set(), // peak IDs (OSM or custom) the user has hidden
     filters: {
@@ -46,6 +72,13 @@
       showElev: true,
       border: true,
     },
+    style: {
+      icon: "triangle", // peakIcons key
+      paperColor: "#f6f1e6", // poster + map background
+      blendMap: false, // mix-blend-mode: multiply on base tile pane
+      contourSource: "opentopo", // contourSources key
+      stadiaKey: "", // optional Stadia Maps API key
+    },
   };
 
   const USER_DATA_KEY = "pbpg.user";
@@ -57,6 +90,9 @@
       const data = JSON.parse(raw);
       if (Array.isArray(data.custom)) state.custom = data.custom;
       if (Array.isArray(data.excluded)) state.excluded = new Set(data.excluded);
+      if (data.style && typeof data.style === "object") {
+        Object.assign(state.style, data.style);
+      }
     } catch (e) {
       // Corrupt storage shouldn't break the app — just log and move on.
       console.warn("Could not load user data:", e);
@@ -70,6 +106,7 @@
         JSON.stringify({
           custom: state.custom,
           excluded: Array.from(state.excluded),
+          style: state.style,
         })
       );
     } catch (e) {
@@ -125,6 +162,66 @@
   }
 
   // ---------------------------------------------------------------
+  // Peak icon library — SVG markup keyed for the picker
+  // ---------------------------------------------------------------
+  //
+  // Each icon is a small viewBox-12 SVG that the CSS variables for fill
+  // and stroke colour. The wrapper class (.pin--<key>) lets each style
+  // tune fill/stroke rules (outline vs solid, lines vs polygons).
+  const peakIcons = {
+    triangle: {
+      label: "Triangle",
+      svg:
+        '<svg viewBox="0 0 12 12" aria-hidden="true">' +
+        '<polygon points="6,1.5 11,10.5 1,10.5" stroke-width="0.9" stroke-linejoin="round"/>' +
+        "</svg>",
+    },
+    "triangle-fill": {
+      label: "Solid triangle",
+      svg:
+        '<svg viewBox="0 0 12 12" aria-hidden="true">' +
+        '<polygon points="6,1 11,10.5 1,10.5"/>' +
+        "</svg>",
+    },
+    mountain: {
+      label: "Mountain range",
+      svg:
+        '<svg viewBox="0 0 12 12" aria-hidden="true">' +
+        '<polygon points="0.5,11 3.5,5 5.5,7.5 8,3 11.5,11" stroke-width="0.6" stroke-linejoin="round"/>' +
+        "</svg>",
+    },
+    bench: {
+      label: "USGS benchmark",
+      svg:
+        '<svg viewBox="0 0 12 12" aria-hidden="true">' +
+        '<circle cx="6" cy="6" r="4.5" fill="none" stroke-width="0.9"/>' +
+        '<line x1="6" y1="1" x2="6" y2="11" stroke-width="0.9"/>' +
+        '<line x1="1" y1="6" x2="11" y2="6" stroke-width="0.9"/>' +
+        "</svg>",
+    },
+    "spot-height": {
+      label: "Spot height",
+      svg:
+        '<svg viewBox="0 0 12 12" aria-hidden="true">' +
+        '<line x1="2" y1="2" x2="10" y2="10" stroke-width="0.9"/>' +
+        '<line x1="10" y1="2" x2="2" y2="10" stroke-width="0.9"/>' +
+        '<circle cx="6" cy="6" r="1.6" stroke="none"/>' +
+        "</svg>",
+    },
+    dot: {
+      label: "Dot",
+      svg:
+        '<svg viewBox="0 0 12 12" aria-hidden="true">' +
+        '<circle cx="6" cy="6" r="2.8" stroke="none"/>' +
+        "</svg>",
+    },
+  };
+
+  function iconForKey(key) {
+    return peakIcons[key] ? key : "triangle";
+  }
+
+  // ---------------------------------------------------------------
   // Map setup
   // ---------------------------------------------------------------
 
@@ -137,6 +234,13 @@
   map.attributionControl = L.control
     .attribution({ position: "bottomleft", prefix: false })
     .addTo(map);
+
+  // Custom pane for the contour overlay so we can blend the contour tiles
+  // with the underlying basemap independently of the user's CSS-filter
+  // tweaks on the base tiles.
+  map.createPane("contour");
+  map.getPane("contour").style.zIndex = 350;
+  map.getPane("contour").classList.add("contour-pane");
 
   // Base map styles. The user picks one from the "Map style" dropdown.
   // Each option is a meaningfully different look — clean hillshade, classic
@@ -153,7 +257,8 @@
       }
     ),
     toner: L.tileLayer(
-      "https://tiles.stadiamaps.com/tiles/stamen_toner_background/{z}/{x}/{y}.png",
+      "https://tiles.stadiamaps.com/tiles/stamen_toner_background/{z}/{x}/{y}.png" +
+        stadiaKeySuffix(),
       {
         maxZoom: 18,
         zIndex: 1,
@@ -208,19 +313,112 @@
     ),
   };
 
-  // Contour overlay: purely topographic lines, no labels.
-  const contourLayer = L.tileLayer(
-    "https://tiles.stadiamaps.com/tiles/stamen_terrain_lines/{z}/{x}/{y}.png",
-    {
-      maxZoom: 18,
-      opacity: 0.6,
-      zIndex: 2,
-      attribution:
-        'Contours © <a href="https://stadiamaps.com/">Stadia Maps</a>, ' +
-        '<a href="https://stamen.com/">Stamen Design</a>; ' +
-        'data © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+  // Contour overlay configurations. Stadia is the "purest" (lines-only),
+  // but its tiles require a registered domain or API key for production
+  // sites, so it's no longer the default — OpenTopoMap, blended with
+  // mix-blend-mode multiply, gives a usable contour effect on any host.
+  function stadiaKeySuffix() {
+    const k = state.style.stadiaKey && state.style.stadiaKey.trim();
+    return k ? "?api_key=" + encodeURIComponent(k) : "";
+  }
+
+  // NOTE on Stamen terrain layers: `stamen_terrain_lines` is misleadingly
+  // named — it's the OSM line work (roads, state borders, water edges),
+  // NOT contour lines. The actual contour lines live inside the
+  // `stamen_terrain_background` hillshade tile and `stamen_terrain` (full).
+  // We use `stamen_terrain_background` here so the overlay contributes
+  // hillshade + contours together, then mix-blend-mode multiply on the
+  // pane drops the white tile background so it composites cleanly over
+  // whatever basemap the user picked.
+  const contourSources = {
+    opentopo: {
+      label: "OpenTopoMap (no key)",
+      build: () =>
+        L.tileLayer("https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png", {
+          pane: "contour",
+          maxZoom: 17,
+          subdomains: "abc",
+          className: "contour-tile contour-tile--blend",
+          attribution:
+            'Contours © <a href="https://opentopomap.org/">OpenTopoMap</a>',
+        }),
+    },
+    stadia_terrain_bg: {
+      label: "Stamen Terrain — hillshade + contours (Stadia)",
+      build: () =>
+        L.tileLayer(
+          "https://tiles.stadiamaps.com/tiles/stamen_terrain_background/{z}/{x}/{y}.png" +
+            stadiaKeySuffix(),
+          {
+            pane: "contour",
+            maxZoom: 18,
+            className: "contour-tile contour-tile--blend",
+            attribution:
+              'Terrain © <a href="https://stadiamaps.com/">Stadia Maps</a>, ' +
+              '<a href="https://stamen.com/">Stamen Design</a>',
+          }
+        ),
+    },
+    stadia_terrain: {
+      label: "Stamen Terrain — full (Stadia, with labels)",
+      build: () =>
+        L.tileLayer(
+          "https://tiles.stadiamaps.com/tiles/stamen_terrain/{z}/{x}/{y}.png" +
+            stadiaKeySuffix(),
+          {
+            pane: "contour",
+            maxZoom: 18,
+            className: "contour-tile contour-tile--blend",
+            attribution:
+              'Terrain © <a href="https://stadiamaps.com/">Stadia Maps</a>, ' +
+              '<a href="https://stamen.com/">Stamen Design</a>',
+          }
+        ),
+    },
+    usgs: {
+      label: "USGS Topo (US only)",
+      build: () =>
+        L.tileLayer(
+          "https://server.arcgisonline.com/arcgis/rest/services/USA_Topo_Maps/MapServer/tile/{z}/{y}/{x}",
+          {
+            pane: "contour",
+            maxZoom: 16,
+            className: "contour-tile contour-tile--blend",
+            attribution:
+              'USGS Topo © <a href="https://www.esri.com/">Esri</a>',
+          }
+        ),
+    },
+    none: { label: "None", build: () => null },
+  };
+
+  let contourLayer = null;
+  function applyContour() {
+    if (contourLayer) {
+      map.removeLayer(contourLayer);
+      contourLayer = null;
     }
-  );
+    if (!$("opt-contours").checked) return;
+    const cfg = contourSources[state.style.contourSource] || contourSources.opentopo;
+    const layer = cfg.build();
+    if (!layer) return;
+    // Warn the user if Stadia 401s instead of letting the failure be silent.
+    const isStadia = state.style.contourSource.startsWith("stadia");
+    let warned = false;
+    layer.on("tileerror", () => {
+      if (warned) return;
+      warned = true;
+      if (isStadia && !stadiaKeySuffix()) {
+        setStatus("contour: register domain or add Stadia key", "error");
+      } else {
+        setStatus("contour tiles failed", "error");
+      }
+    });
+    layer.setOpacity((+$("opt-contour-density").value || 60) / 100);
+    layer.addTo(map);
+    contourLayer = layer;
+  }
+
   const osmLayer = L.tileLayer(
     "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
     {
@@ -259,7 +457,6 @@
   }
   baseLayers[currentBaseKey].addTo(map);
   setMapTone(currentBaseKey);
-  contourLayer.addTo(map);
 
   const peaksGroup = L.layerGroup().addTo(map);
 
@@ -271,17 +468,40 @@
   ]);
 
   // ---------------------------------------------------------------
-  // Overpass: fetch peaks for current map view
+  // Overpass: fetch peaks for current map view, cell-cached
   // ---------------------------------------------------------------
+  //
+  // Peak data doesn't change with zoom level, so caching by exact bbox+zoom
+  // (the old behaviour) re-fetched the same peaks every time the user
+  // panned or zoomed. Now we snap each request to a coarse grid, cache by
+  // cell, and combine missing cells into a single Overpass query.
 
-  function bboxKey(bounds, zoom) {
-    return [
-      bounds.getSouth().toFixed(3),
-      bounds.getWest().toFixed(3),
-      bounds.getNorth().toFixed(3),
-      bounds.getEast().toFixed(3),
-      zoom,
-    ].join("/");
+  function cellKey(s, w, step) {
+    return s.toFixed(3) + "/" + w.toFixed(3) + "/" + step;
+  }
+
+  function cellsForBounds(bounds, step) {
+    const s0 = Math.floor(bounds.getSouth() / step) * step;
+    const w0 = Math.floor(bounds.getWest() / step) * step;
+    const n0 = Math.ceil(bounds.getNorth() / step) * step;
+    const e0 = Math.ceil(bounds.getEast() / step) * step;
+    const out = [];
+    // Floating-point drift can leave the loop one cell short if we use
+    // strict `<`, so subtract a small epsilon when comparing.
+    const eps = step / 1000;
+    for (let lat = s0; lat < n0 - eps; lat += step) {
+      for (let lng = w0; lng < e0 - eps; lng += step) {
+        out.push({
+          s: +lat.toFixed(6),
+          w: +lng.toFixed(6),
+          n: +(lat + step).toFixed(6),
+          e: +(lng + step).toFixed(6),
+          step: step,
+          key: cellKey(lat, lng, step),
+        });
+      }
+    }
+    return out;
   }
 
   function parseElev(raw) {
@@ -338,6 +558,58 @@
     throw lastErr || new Error("All Overpass endpoints failed");
   }
 
+  function buildOverpassQuery(cells) {
+    const parts = cells
+      .map(
+        (c) =>
+          'node["natural"="peak"](' + c.s + "," + c.w + "," + c.n + "," + c.e + ");" +
+          'node["natural"="volcano"](' + c.s + "," + c.w + "," + c.n + "," + c.e + ");"
+      )
+      .join("");
+    return "[out:json][timeout:25];(" + parts + ");out body;";
+  }
+
+  function bucketPeaksIntoCells(peaks, cells) {
+    const out = new Map();
+    cells.forEach((c) => out.set(c.key, []));
+    peaks.forEach((p) => {
+      // A peak technically only belongs to one cell, but the parsed cell
+      // bounds are inclusive so duplicates between adjacent cells are
+      // possible — dedupe by ID at the caller.
+      for (const c of cells) {
+        if (p.lat >= c.s && p.lat <= c.n && p.lng >= c.w && p.lng <= c.e) {
+          out.get(c.key).push(p);
+          break;
+        }
+      }
+    });
+    return out;
+  }
+
+  function cachedCellPeaks(c) {
+    const entry = state.cache.get(c.key);
+    if (!entry) return null;
+    if (Date.now() - entry.t > PEAK_CACHE_TTL_MS) {
+      state.cache.delete(c.key);
+      return null;
+    }
+    return entry.peaks;
+  }
+
+  async function fetchCells(cells, signal) {
+    if (!cells.length) return [];
+    const data = await overpassFetch(buildOverpassQuery(cells), signal);
+    const peaks = (data.elements || []).map(parseOSMElement).filter(Boolean);
+    const bucketed = bucketPeaksIntoCells(peaks, cells);
+    const now = Date.now();
+    bucketed.forEach((p, key) => state.cache.set(key, { peaks: p, t: now }));
+    // Mark even empty cells as cached so we don't re-query.
+    cells.forEach((c) => {
+      if (!state.cache.has(c.key)) state.cache.set(c.key, { peaks: [], t: now });
+    });
+    return peaks;
+  }
+
   async function fetchPeaks() {
     const zoom = map.getZoom();
     const bounds = map.getBounds();
@@ -350,14 +622,25 @@
       return;
     }
 
-    const key = bboxKey(bounds, zoom);
-    if (state.cache.has(key)) {
-      state.peaks = state.cache.get(key);
+    const { cells, step } = chooseCellsForBounds(bounds, zoom);
+    const cached = [];
+    const missing = [];
+    cells.forEach((c) => {
+      const hit = cachedCellPeaks(c);
+      if (hit) cached.push(...hit);
+      else missing.push(c);
+    });
+
+    if (!missing.length) {
+      const byId = new Map();
+      cached.forEach((p) => byId.set(p.id, p));
+      state.peaks = Array.from(byId.values());
+      setStatus(state.peaks.length + " peaks (cached)", "ready");
       render();
+      schedulePrefetch(cells, step);
       return;
     }
 
-    // Cancel any in-flight request.
     if (state.inflight) state.inflight.abort();
     const ctrl = new AbortController();
     state.inflight = ctrl;
@@ -365,26 +648,16 @@
 
     setStatus("loading peaks…", "loading");
 
-    const s = bounds.getSouth();
-    const w = bounds.getWest();
-    const n = bounds.getNorth();
-    const e = bounds.getEast();
-    const query =
-      "[out:json][timeout:25];" +
-      '(node["natural"="peak"](' + s + "," + w + "," + n + "," + e + ");" +
-      'node["natural"="volcano"](' + s + "," + w + "," + n + "," + e + "););" +
-      "out body;";
-
     try {
-      const data = await overpassFetch(query, ctrl.signal);
-      if (mySeq !== state.fetchSeq) return; // a newer fetch superseded us
-      const peaks = (data.elements || [])
-        .map(parseOSMElement)
-        .filter(Boolean);
-      state.cache.set(key, peaks);
-      state.peaks = peaks;
-      setStatus(peaks.length + " peaks loaded", "ready");
+      const fetched = await fetchCells(missing, ctrl.signal);
+      if (mySeq !== state.fetchSeq) return;
+
+      const byId = new Map();
+      cached.concat(fetched).forEach((p) => byId.set(p.id, p));
+      state.peaks = Array.from(byId.values());
+      setStatus(state.peaks.length + " peaks loaded", "ready");
       render();
+      schedulePrefetch(cells, step);
     } catch (err) {
       if (err.name === "AbortError") return;
       console.error("Overpass fetch failed:", err);
@@ -394,7 +667,36 @@
     }
   }
 
-  const fetchPeaksDebounced = debounce(fetchPeaks, 600);
+  // Background pre-fetch: after the visible area loads, quietly pull the
+  // ring of cells around it so the next pan in any direction is instant.
+  function schedulePrefetch(visibleCells, step) {
+    if (state.prefetchTimer) clearTimeout(state.prefetchTimer);
+    state.prefetchTimer = setTimeout(() => {
+      if (!visibleCells.length) return;
+      let minS = Infinity, minW = Infinity, maxN = -Infinity, maxE = -Infinity;
+      visibleCells.forEach((c) => {
+        if (c.s < minS) minS = c.s;
+        if (c.w < minW) minW = c.w;
+        if (c.n > maxN) maxN = c.n;
+        if (c.e > maxE) maxE = c.e;
+      });
+      const expanded = {
+        getSouth: () => minS - step,
+        getWest: () => minW - step,
+        getNorth: () => maxN + step,
+        getEast: () => maxE + step,
+      };
+      const neighbors = cellsForBounds(expanded, step).filter(
+        (c) => !cachedCellPeaks(c)
+      );
+      if (!neighbors.length) return;
+      // Cap each prefetch batch so we never blow past Overpass's limits.
+      const batch = neighbors.slice(0, 12);
+      fetchCells(batch).catch(() => {});
+    }, 1800);
+  }
+
+  const fetchPeaksDebounced = debounce(fetchPeaks, 400);
 
   // ---------------------------------------------------------------
   // Rendering
@@ -453,17 +755,17 @@
         "</span>"
       : "";
 
-    // SVG triangle — fill/stroke are owned by CSS so they can flip when
-    // the basemap tone changes.
-    const tri =
-      '<svg class="pin__tri" viewBox="0 0 12 11" aria-hidden="true">' +
-      '<polygon points="6,1 11,10 1,10" ' +
-      'stroke-width="0.9" stroke-linejoin="round"/>' +
-      "</svg>";
+    const iconKey = iconForKey(state.style.icon);
+    const glyph =
+      '<span class="pin__glyph pin__glyph--' + iconKey + '">' +
+      peakIcons[iconKey].svg +
+      "</span>";
 
     const html =
-      '<div class="pin ' + (dimmed ? "pin--dim" : "") + '">' +
-      tri +
+      '<div class="pin pin--' + iconKey + " " +
+      (dimmed ? "pin--dim" : "") +
+      '">' +
+      glyph +
       label +
       "</div>";
 
@@ -810,14 +1112,73 @@
     });
   }
 
+  // Apply mix-blend-mode multiply to base tiles so the white parts of
+  // hillshade/topo tiles take on the paper colour underneath. This is
+  // what lets the user "make the map match the poster".
+  function applyBlendMap() {
+    const tilePane = map.getPanes().tilePane;
+    tilePane.style.mixBlendMode = state.style.blendMap ? "multiply" : "";
+  }
+
+  function applyPaperColor() {
+    document.documentElement.style.setProperty("--paper", state.style.paperColor);
+  }
+
+  function setIconPickerSelection(key) {
+    document.querySelectorAll(".icon-picker__opt").forEach((btn) => {
+      btn.classList.toggle(
+        "icon-picker__opt--on",
+        btn.dataset.icon === key
+      );
+    });
+  }
+
+  function buildIconPicker() {
+    const root = $("icon-picker");
+    if (!root) return;
+    root.innerHTML = Object.entries(peakIcons)
+      .map(
+        ([key, ic]) =>
+          '<button type="button" class="icon-picker__opt pin pin--' +
+          key +
+          '" ' +
+          'data-icon="' + key + '" title="' + escapeHtml(ic.label) + '" ' +
+          'aria-label="' + escapeHtml(ic.label) + '">' +
+          '<span class="pin__glyph pin__glyph--' + key + '">' +
+          ic.svg +
+          "</span></button>"
+      )
+      .join("");
+    setIconPickerSelection(state.style.icon);
+    root.addEventListener("click", (e) => {
+      const btn = e.target.closest(".icon-picker__opt");
+      if (!btn) return;
+      state.style.icon = iconForKey(btn.dataset.icon);
+      setIconPickerSelection(state.style.icon);
+      saveUserData();
+      render();
+    });
+  }
+
   function wireStyle() {
     $("opt-map-style").addEventListener("change", (e) => {
       applyMapStyle(e.target.value);
     });
-    $("opt-contours").addEventListener("change", (e) => {
-      if (e.target.checked) contourLayer.addTo(map);
-      else map.removeLayer(contourLayer);
+    $("opt-contours").addEventListener("change", applyContour);
+    $("opt-contour-source").addEventListener("change", (e) => {
+      state.style.contourSource = e.target.value;
+      // Stadia key field is only useful for the Stadia-hosted sources.
+      $("opt-stadia-key-wrap").style.display =
+        state.style.contourSource.startsWith("stadia") ? "" : "none";
+      saveUserData();
+      applyContour();
     });
+    $("opt-stadia-key").addEventListener("change", (e) => {
+      state.style.stadiaKey = e.target.value.trim();
+      saveUserData();
+      applyContour();
+    });
+
     $("opt-osm").addEventListener("change", (e) => {
       if (e.target.checked) osmLayer.addTo(map);
       else map.removeLayer(osmLayer);
@@ -833,7 +1194,7 @@
     const contourSlider = $("opt-contour-density");
     contourSlider.addEventListener("input", () => {
       const v = +contourSlider.value;
-      contourLayer.setOpacity(v / 100);
+      if (contourLayer) contourLayer.setOpacity(v / 100);
       $("contour-readout").textContent = v + "%";
     });
 
@@ -852,6 +1213,26 @@
       $(id).addEventListener("input", applyFilters)
     );
     applyFilters();
+
+    // Paper color + blend
+    const paperInput = $("opt-paper");
+    const paperReadout = $("paper-readout");
+    paperInput.value = state.style.paperColor;
+    if (paperReadout) paperReadout.textContent = state.style.paperColor;
+    paperInput.addEventListener("input", () => {
+      state.style.paperColor = paperInput.value;
+      if (paperReadout) paperReadout.textContent = state.style.paperColor;
+      applyPaperColor();
+      saveUserData();
+    });
+
+    const blendInput = $("opt-blend-map");
+    blendInput.checked = state.style.blendMap;
+    blendInput.addEventListener("change", () => {
+      state.style.blendMap = blendInput.checked;
+      applyBlendMap();
+      saveUserData();
+    });
   }
 
   function wirePoster() {
@@ -1088,6 +1469,17 @@
 
   loadUserData();
 
+  // Hydrate persisted style choices into the DOM before any wiring runs.
+  applyPaperColor();
+  if ($("opt-contour-source")) $("opt-contour-source").value = state.style.contourSource;
+  if ($("opt-stadia-key")) $("opt-stadia-key").value = state.style.stadiaKey;
+  if ($("opt-stadia-key-wrap")) {
+    $("opt-stadia-key-wrap").style.display =
+      state.style.contourSource.startsWith("stadia") ? "" : "none";
+  }
+
+  buildIconPicker();
+
   wirePanel();
   wireUnits();
   wireFilters();
@@ -1097,6 +1489,11 @@
   wirePresets();
   wirePeakList();
   wireCustomPeaks();
+
+  // Contours/blend depend on persisted style state — apply after wiring so
+  // the layer matches the dropdown the user actually sees.
+  applyContour();
+  applyBlendMap();
 
   map.on("moveend", () => {
     updateFooter();
