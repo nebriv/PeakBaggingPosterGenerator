@@ -10,6 +10,12 @@
       integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
       crossorigin=""
     />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=EB+Garamond:ital,wght@0,500;1,500;1,600&display=swap"
+      rel="stylesheet"
+    />
     <link rel="stylesheet" href="css/style.css" />
   </head>
   <body>
@@ -325,14 +331,74 @@
               <ul class="peaklist" id="peaklist"></ul>
             </div>
             <div class="panel__body">
-              <button type="button" class="btn add-peak-btn" id="add-peak-btn">
-                + Add a peak manually
-              </button>
-              <p class="field__hint">
-                Drops a pin where you click on the map. Useful for peaks
-                OSM is missing or registers under a different name. Saved
-                locally; persists across reloads.
-              </p>
+              <details class="add-peak">
+                <summary class="add-peak__toggle">
+                  + Add a peak by coordinates
+                </summary>
+                <form id="add-peak-form" class="add-peak__form">
+                  <label class="field">
+                    <span class="field__label">Name</span>
+                    <input
+                      type="text"
+                      id="ap-name"
+                      required
+                      maxlength="80"
+                      placeholder="e.g. Cliff"
+                    />
+                  </label>
+                  <label class="field">
+                    <span class="field__label">
+                      Elevation
+                      <span class="field__value" id="ap-unit">ft</span>
+                    </span>
+                    <input
+                      type="number"
+                      id="ap-ele"
+                      step="1"
+                      placeholder="optional"
+                    />
+                  </label>
+                  <div class="add-peak__coords">
+                    <label class="field">
+                      <span class="field__label">Lat</span>
+                      <input
+                        type="number"
+                        id="ap-lat"
+                        step="0.000001"
+                        required
+                        placeholder="44.1126"
+                      />
+                    </label>
+                    <label class="field">
+                      <span class="field__label">Lng</span>
+                      <input
+                        type="number"
+                        id="ap-lng"
+                        step="0.000001"
+                        required
+                        placeholder="-73.9237"
+                      />
+                    </label>
+                  </div>
+                  <p
+                    class="add-peak__error"
+                    id="ap-error"
+                    style="display: none"
+                  ></p>
+                  <div class="add-peak__actions">
+                    <button type="button" class="btn" id="ap-center">
+                      Use map center
+                    </button>
+                    <button type="submit" class="btn btn--solid">
+                      Add peak
+                    </button>
+                  </div>
+                  <p class="field__hint">
+                    Drop a pin in Google Maps and copy the lat/lng from
+                    the URL. Saved locally; persists across reloads.
+                  </p>
+                </form>
+              </details>
             </div>
             <div
               class="panel__sub"

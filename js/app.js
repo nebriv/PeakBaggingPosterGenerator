@@ -32,7 +32,6 @@
     inflight: null, // AbortController
     custom: [], // user-added peaks, persisted to localStorage
     excluded: new Set(), // peak IDs (OSM or custom) the user has hidden
-    addingPeak: false, // true while "click the map to drop a peak" is active
     filters: {
       eleMin: 0,
       eleMax: 9000,
@@ -436,9 +435,17 @@
         "</span>"
       : "";
 
+    // SVG triangle with a paper-colored stroke so it stays legible on
+    // hillshade, contour, and satellite alike.
+    const tri =
+      '<svg class="pin__tri" viewBox="0 0 12 11" aria-hidden="true">' +
+      '<polygon points="6,1 11,10 1,10" fill="currentColor" ' +
+      'stroke="#f6f1e6" stroke-width="0.9" stroke-linejoin="round"/>' +
+      "</svg>";
+
     const html =
       '<div class="pin ' + (dimmed ? "pin--dim" : "") + '">' +
-      '<span class="pin__tri" aria-hidden="true"></span>' +
+      tri +
       label +
       "</div>";
 
@@ -721,6 +728,7 @@
       $("unit-ft").classList.toggle("seg__btn--on", unit === "ft");
       $("unit-m").classList.toggle("seg__btn--on", unit === "m");
       $("foot-unit").textContent = "elevations in " + (unit === "ft" ? "feet" : "meters");
+      refreshAddPeakUnit();
       render();
     }
     $("unit-ft").addEventListener("click", () => setUnit("ft"));
@@ -965,26 +973,8 @@
   }
 
   // -----------------------------------------------------------------
-  // Custom peaks — click on the map to drop a pin, fill in a popup form.
+  // Custom peaks — entered by coordinates in the side panel.
   // -----------------------------------------------------------------
-
-  function startAddingPeak() {
-    state.addingPeak = true;
-    map.getContainer().classList.add("map--adding-peak");
-    setStatus("click the map to drop a peak", "info");
-    const btn = $("add-peak-btn");
-    btn.classList.add("add-peak-btn--active");
-    btn.textContent = "Click map to place (Esc to cancel)";
-  }
-
-  function stopAddingPeak() {
-    state.addingPeak = false;
-    map.getContainer().classList.remove("map--adding-peak");
-    const btn = $("add-peak-btn");
-    btn.classList.remove("add-peak-btn--active");
-    btn.textContent = "+ Add a peak manually";
-    setStatus("ready", "ready");
-  }
 
   function addCustomPeak({ name, eleM, lat, lng }) {
     const peak = {
@@ -1006,71 +996,62 @@
     render();
   }
 
-  function showAddPeakPopup(latlng) {
-    const unitLabel = state.unit;
-    const html =
-      '<form class="addpeak" id="addpeak-form">' +
-      '<input class="addpeak__name" type="text" name="name" ' +
-      'placeholder="Peak name" required maxlength="80" />' +
-      '<div class="addpeak__row">' +
-      '<input class="addpeak__ele" type="number" name="ele" step="1" ' +
-      'placeholder="Elevation" />' +
-      '<span class="addpeak__unit">' + escapeHtml(unitLabel) + "</span>" +
-      "</div>" +
-      '<div class="addpeak__row">' +
-      '<button type="submit" class="addpeak__btn addpeak__btn--save">' +
-      "Save</button>" +
-      '<button type="button" class="addpeak__btn" id="addpeak-cancel">' +
-      "Cancel</button>" +
-      "</div>" +
-      "</form>";
-
-    const popup = L.popup({ closeButton: false, minWidth: 200, maxWidth: 240 })
-      .setLatLng(latlng)
-      .setContent(html)
-      .openOn(map);
-
-    // Leaflet inserts the popup DOM after openOn resolves; defer focus and
-    // wire-up by one tick so the elements exist.
-    setTimeout(() => {
-      const form = document.getElementById("addpeak-form");
-      if (!form) return;
-      const nameInput = form.querySelector(".addpeak__name");
-      if (nameInput) nameInput.focus();
-      form.addEventListener("submit", (e) => {
-        e.preventDefault();
-        const name = form.name.value.trim();
-        if (!name) return;
-        const eleRaw = form.ele.value.trim();
-        let eleM = null;
-        if (eleRaw !== "") {
-          const v = parseFloat(eleRaw);
-          if (!Number.isNaN(v)) {
-            eleM = state.unit === "ft" ? v / M_TO_FT : v;
-          }
-        }
-        addCustomPeak({ name, eleM, lat: latlng.lat, lng: latlng.lng });
-        map.closePopup(popup);
-      });
-      const cancelBtn = document.getElementById("addpeak-cancel");
-      if (cancelBtn) {
-        cancelBtn.addEventListener("click", () => map.closePopup(popup));
-      }
-    }, 0);
+  function refreshAddPeakUnit() {
+    const el = $("ap-unit");
+    if (el) el.textContent = state.unit;
   }
 
   function wireCustomPeaks() {
-    $("add-peak-btn").addEventListener("click", () => {
-      if (state.addingPeak) stopAddingPeak();
-      else startAddingPeak();
+    const form = $("add-peak-form");
+    if (!form) return;
+    const nameInput = $("ap-name");
+    const eleInput = $("ap-ele");
+    const latInput = $("ap-lat");
+    const lngInput = $("ap-lng");
+    const errEl = $("ap-error");
+
+    refreshAddPeakUnit();
+
+    function showError(msg) {
+      if (!errEl) return;
+      errEl.textContent = msg || "";
+      errEl.style.display = msg ? "" : "none";
+    }
+
+    $("ap-center").addEventListener("click", () => {
+      const c = map.getCenter();
+      latInput.value = c.lat.toFixed(6);
+      lngInput.value = c.lng.toFixed(6);
+      nameInput.focus();
     });
-    map.on("click", (e) => {
-      if (!state.addingPeak) return;
-      stopAddingPeak();
-      showAddPeakPopup(e.latlng);
-    });
-    document.addEventListener("keydown", (e) => {
-      if (e.key === "Escape" && state.addingPeak) stopAddingPeak();
+
+    form.addEventListener("submit", (e) => {
+      e.preventDefault();
+      showError("");
+      const name = nameInput.value.trim();
+      if (!name) return showError("Name is required.");
+      const lat = parseFloat(latInput.value);
+      if (!Number.isFinite(lat) || lat < -90 || lat > 90) {
+        return showError("Latitude must be between -90 and 90.");
+      }
+      const lng = parseFloat(lngInput.value);
+      if (!Number.isFinite(lng) || lng < -180 || lng > 180) {
+        return showError("Longitude must be between -180 and 180.");
+      }
+      let eleM = null;
+      const eleRaw = eleInput.value.trim();
+      if (eleRaw !== "") {
+        const v = parseFloat(eleRaw);
+        if (Number.isFinite(v)) {
+          eleM = state.unit === "ft" ? v / M_TO_FT : v;
+        }
+      }
+      addCustomPeak({ name, eleM, lat, lng });
+      // Clear name + elevation, but keep the lat/lng since the user is
+      // probably entering several nearby peaks.
+      nameInput.value = "";
+      eleInput.value = "";
+      nameInput.focus();
     });
   }
 
