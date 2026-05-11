@@ -876,7 +876,7 @@
     return arr;
   }
 
-  function buildPinElement(peak, dimmed) {
+  function buildPinElement(peak) {
     const nameHtml = peak.name
       ? '<span class="pin__name">' + escapeHtml(peak.name) + "</span>"
       : "";
@@ -900,7 +900,7 @@
       "</span>";
 
     const el = document.createElement("div");
-    el.className = "pin pin--" + iconKey + (dimmed ? " pin--dim" : "");
+    el.className = "pin pin--" + iconKey;
     el.innerHTML = glyph + label;
     return el;
   }
@@ -926,22 +926,11 @@
   function render() {
     const shown = visiblePeaks();
     suppressOverlappingLabels(shown);
-    const shownIds = new Set(shown.map((p) => p.id));
 
     const wantedIds = new Set();
-    // Full-strength markers for visible peaks
     shown.forEach((peak) => {
       wantedIds.add(peak.id);
-      const el = buildPinElement(peak, false);
-      upsertMarker(peak, el);
-    });
-    // Dimmed markers for in-region but filtered-out peaks
-    allPeaks().forEach((peak) => {
-      if (shownIds.has(peak.id)) return;
-      if (state.excluded.has(peak.id)) return;
-      if (peak.ele == null && !peak.name) return;
-      wantedIds.add(peak.id);
-      const el = buildPinElement(peak, true);
+      const el = buildPinElement(peak);
       upsertMarker(peak, el);
     });
 
