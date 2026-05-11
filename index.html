@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Adirondack 46 High Peaks &mdash; Poster Generator</title>
+  <link
+    rel="stylesheet"
+    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+    crossorigin=""
+  />
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar" aria-label="Map controls">
+      <header class="sidebar__header">
+        <h1>ADK 46 Poster</h1>
+        <p class="sidebar__subtitle">High Peaks map for makers</p>
+      </header>
+
+      <section class="control-group">
+        <h2>Title</h2>
+        <label class="control">
+          <span>Poster title</span>
+          <input type="text" id="poster-title" value="Adirondack High Peaks" />
+        </label>
+        <label class="control">
+          <span>Subtitle</span>
+          <input type="text" id="poster-subtitle" value="The 46ers" />
+        </label>
+      </section>
+
+      <section class="control-group">
+        <h2>Elevation</h2>
+        <div class="range">
+          <div class="range__values">
+            <span id="elev-min-val">3820</span>
+            <span>&ndash;</span>
+            <span id="elev-max-val">5344</span>
+            <span class="range__unit">ft</span>
+          </div>
+          <label class="range__label">
+            <span>Min</span>
+            <input
+              type="range"
+              id="elev-min"
+              min="3820"
+              max="5344"
+              value="3820"
+              step="1"
+            />
+          </label>
+          <label class="range__label">
+            <span>Max</span>
+            <input
+              type="range"
+              id="elev-max"
+              min="3820"
+              max="5344"
+              value="5344"
+              step="1"
+            />
+          </label>
+          <div class="range__hint">
+            Peaks outside this range are dimmed.
+          </div>
+        </div>
+      </section>
+
+      <section class="control-group">
+        <h2>Map Layers</h2>
+        <div class="toggle-list">
+          <label class="toggle"
+            ><input type="checkbox" id="toggle-contours" checked />
+            <span>Contours &amp; hillshade</span></label
+          >
+          <label class="toggle"
+            ><input type="checkbox" id="toggle-roads" />
+            <span>Roads &amp; water (OSM overlay)</span></label
+          >
+          <label class="toggle"
+            ><input type="checkbox" id="toggle-peaks" checked />
+            <span>Peak markers</span></label
+          >
+          <label class="toggle"
+            ><input type="checkbox" id="toggle-peak-labels" checked />
+            <span>Peak names</span></label
+          >
+          <label class="toggle"
+            ><input type="checkbox" id="toggle-elevations" checked />
+            <span>Elevations</span></label
+          >
+          <label class="toggle"
+            ><input type="checkbox" id="toggle-border" checked />
+            <span>Poster border</span></label
+          >
+          <label class="toggle"
+            ><input type="checkbox" id="toggle-attribution" checked />
+            <span>Map attribution</span></label
+          >
+        </div>
+      </section>
+
+      <section class="control-group">
+        <h2>Style</h2>
+        <label class="control">
+          <span>Tint <small>(0 = pure B&amp;W)</small></span>
+          <input
+            type="range"
+            id="saturation"
+            min="0"
+            max="100"
+            value="0"
+          />
+        </label>
+        <label class="control">
+          <span>Contrast</span>
+          <input
+            type="range"
+            id="contrast"
+            min="50"
+            max="200"
+            value="115"
+          />
+        </label>
+        <label class="control">
+          <span>Brightness</span>
+          <input
+            type="range"
+            id="brightness"
+            min="50"
+            max="150"
+            value="105"
+          />
+        </label>
+      </section>
+
+      <section class="control-group">
+        <h2>Frame</h2>
+        <div class="frame-controls">
+          <label class="control">
+            <span>Aspect</span>
+            <select id="aspect">
+              <option value="2:3">2:3 portrait (12&times;18)</option>
+              <option value="3:4" selected>3:4 portrait (18&times;24)</option>
+              <option value="4:5">4:5 portrait (16&times;20)</option>
+              <option value="1:1">1:1 square</option>
+              <option value="4:3">4:3 landscape</option>
+              <option value="3:2">3:2 landscape</option>
+            </select>
+          </label>
+          <button class="btn btn--secondary" id="fit-peaks">
+            Fit all visible peaks
+          </button>
+        </div>
+      </section>
+
+      <section class="control-group">
+        <h2>Export</h2>
+        <p class="muted">
+          For best print quality: set the aspect ratio you want, frame the
+          map, then use your browser's <strong>Print &rarr; Save as PDF</strong>
+          with margins set to None. The poster area prints at full bleed.
+        </p>
+        <button class="btn btn--primary" id="print">
+          Print / Save as PDF
+        </button>
+      </section>
+
+      <footer class="sidebar__footer">
+        <p>
+          Built with
+          <a href="https://leafletjs.com/" target="_blank" rel="noopener"
+            >Leaflet</a
+          >
+          &amp;
+          <a href="https://opentopomap.org/" target="_blank" rel="noopener"
+            >OpenTopoMap</a
+          >.
+        </p>
+        <p>
+          <a
+            href="https://github.com/nebriv/peakbaggingpostergenerator"
+            target="_blank"
+            rel="noopener"
+            >Source on GitHub</a
+          >
+        </p>
+      </footer>
+    </aside>
+
+    <main class="poster-wrap">
+      <div class="poster" id="poster" data-aspect="3:4">
+        <div class="poster__inner">
+          <header class="poster__title">
+            <h2 id="title-display">Adirondack High Peaks</h2>
+            <p id="subtitle-display">The 46ers</p>
+          </header>
+          <div class="poster__map" id="map"></div>
+          <footer class="poster__footer">
+            <span id="footer-left">44.1&deg;N &middot; 73.9&deg;W</span>
+            <span id="footer-right">Elevations in feet</span>
+          </footer>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <script
+    src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+    integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+    crossorigin=""
+  ></script>
+  <script src="js/peaks.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
