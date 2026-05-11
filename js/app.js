@@ -121,17 +121,6 @@
           'Hillshade © <a href="https://www.esri.com/">Esri</a>, USGS, NOAA',
       }
     ),
-    toner: L.tileLayer(
-      "https://tiles.stadiamaps.com/tiles/stamen_toner_background/{z}/{x}/{y}.png",
-      {
-        maxZoom: 18,
-        zIndex: 1,
-        attribution:
-          'Tiles © <a href="https://stadiamaps.com/">Stadia Maps</a>, ' +
-          '<a href="https://stamen.com/">Stamen Design</a>; ' +
-          'data © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
-      }
-    ),
     opentopomap: L.tileLayer(
       "https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png",
       {
@@ -177,16 +166,23 @@
     ),
   };
 
-  // Contour overlay: purely topographic lines, no labels.
+  // Contour overlay. The previous Stamen Terrain Lines source (Stadia Maps)
+  // gave clean label-free contours, but Stadia returns 401 for anonymous
+  // requests from any non-localhost origin, so the deployed GitHub Pages
+  // site rendered every tile as a "401 Invalid Authentication" placeholder.
+  // OpenTopoMap allows unauthenticated requests; its tiles include faint OSM
+  // place names alongside the contours, which the density slider (opacity)
+  // is used to dial back.
   const contourLayer = L.tileLayer(
-    "https://tiles.stadiamaps.com/tiles/stamen_terrain_lines/{z}/{x}/{y}.png",
+    "https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png",
     {
-      maxZoom: 18,
-      opacity: 0.6,
+      maxZoom: 17,
+      subdomains: "abc",
+      opacity: 0.3,
       zIndex: 2,
       attribution:
-        'Contours © <a href="https://stadiamaps.com/">Stadia Maps</a>, ' +
-        '<a href="https://stamen.com/">Stamen Design</a>; ' +
+        'Contours © <a href="https://opentopomap.org/">OpenTopoMap</a> ' +
+        '(<a href="https://creativecommons.org/licenses/by-sa/3.0/">CC-BY-SA</a>), ' +
         'data © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
     }
   );
