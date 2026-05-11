@@ -6,9 +6,7 @@
     <title>Peak Bagging Poster Generator</title>
     <link
       rel="stylesheet"
-      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
-      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
-      crossorigin=""
+      href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css"
     />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -203,28 +201,61 @@
               <label class="field">
                 <span class="field__label">Map style</span>
                 <select id="opt-map-style">
-                  <option value="hillshade" selected>
-                    Hillshade — clean grayscale (Esri)
+                  <option value="hillshade-only" selected>
+                    Hillshade only — clean topo (no labels)
                   </option>
-                  <option value="toner">
-                    Toner — high-contrast B&amp;W (Stamen)
+                  <option value="alidade_smooth">
+                    Alidade Smooth — light grayscale (Stadia)
                   </option>
-                  <option value="opentopomap">
-                    OpenTopoMap — classic topo with labels
+                  <option value="alidade_smooth_dark">
+                    Alidade Smooth Dark (Stadia)
                   </option>
-                  <option value="light">Light minimal (CARTO)</option>
-                  <option value="dark">Dark minimal (CARTO)</option>
+                  <option value="outdoors">
+                    Outdoors — trails &amp; topo (Stadia)
+                  </option>
+                  <option value="stamen_toner">
+                    Stamen Toner — high contrast B&amp;W
+                  </option>
+                  <option value="stamen_toner_lite">
+                    Stamen Toner Lite
+                  </option>
+                  <option value="osm_bright">OSM Bright (Stadia)</option>
                   <option value="satellite">Satellite imagery (Esri)</option>
                   <option value="paper">Paper only — no basemap</option>
                 </select>
                 <p class="field__hint">
-                  Try a few — the saturation/contrast sliders below tune
-                  each style further.
+                  Vector basemaps are crisp at any print DPI. "Hillshade
+                  only" is built from open DEM data and renders as pure
+                  topographic shading with no labels.
+                </p>
+              </label>
+
+              <label class="field">
+                <span class="field__label">Peak icon</span>
+                <div class="icon-picker" id="icon-picker"></div>
+                <p class="field__hint">
+                  Classic topo symbols — pick what matches the poster's mood.
+                </p>
+              </label>
+
+              <label class="field">
+                <span class="field__label">Paper color</span>
+                <div class="color-row">
+                  <input type="color" id="opt-paper" value="#f6f1e6" />
+                  <span class="field__value" id="paper-readout">#f6f1e6</span>
+                </div>
+                <p class="field__hint">
+                  Sets the poster background and the map's untiled areas.
                 </p>
               </label>
               <label class="check">
+                <input type="checkbox" id="opt-blend-map" />
+                <span>Blend basemap into paper (multiply)</span>
+              </label>
+
+              <label class="check">
                 <input type="checkbox" id="opt-contours" checked />
-                <span>Contour lines overlay</span>
+                <span>Contour lines</span>
               </label>
               <label class="field">
                 <span class="field__label">
@@ -239,14 +270,66 @@
                   value="60"
                 />
                 <p class="field__hint">
-                  Topographic lines only — no place names. Slide down for a
-                  cleaner poster, up for denser detail.
+                  Generated client-side from open DEM data. Interval scales
+                  automatically with zoom.
                 </p>
               </label>
               <label class="check">
-                <input type="checkbox" id="opt-osm" />
-                <span>Add road / water overlay</span>
+                <input type="checkbox" id="opt-contour-labels" checked />
+                <span>Show elevation on major contours</span>
               </label>
+
+              <label class="field">
+                <span class="field__label">
+                  Hillshade strength
+                  <span class="field__value" id="hill-readout">50%</span>
+                </span>
+                <input
+                  type="range"
+                  id="opt-hillshade"
+                  min="0"
+                  max="100"
+                  value="50"
+                />
+              </label>
+
+              <label class="field">
+                <span class="field__label">Print quality</span>
+                <select id="opt-print-dpi">
+                  <option value="1">1× — screen (fast)</option>
+                  <option value="2">2× — letter/tabloid prints</option>
+                  <option value="3" selected>
+                    3× — recommended for poster prints
+                  </option>
+                  <option value="4">4× — large-format prints (slow)</option>
+                </select>
+                <p class="field__hint">
+                  Print/PDF re-renders the map at this pixel ratio so the
+                  output is crisp at poster DPI.
+                </p>
+              </label>
+
+              <details class="add-peak">
+                <summary class="add-peak__toggle">
+                  Stadia API key (optional)
+                </summary>
+                <div class="add-peak__form">
+                  <label class="field">
+                    <input
+                      type="text"
+                      id="opt-stadia-key"
+                      placeholder="leave blank if domain is authorized"
+                      autocomplete="off"
+                      spellcheck="false"
+                    />
+                    <p class="field__hint">
+                      Only needed if this host's domain isn't registered
+                      with Stadia Maps.
+                    </p>
+                  </label>
+                </div>
+              </details>
+
               <label class="field">
                 <span class="field__label">
                   Saturation
@@ -443,11 +526,8 @@
       </div>
     </div>
 
-    <script
-      src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
-      integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
-      crossorigin=""
-    ></script>
+    <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+    <script src="https://unpkg.com/maplibre-contour@0.1.0/dist/index.min.js"></script>
     <script src="js/app.js"></script>
   </body>
 </html>

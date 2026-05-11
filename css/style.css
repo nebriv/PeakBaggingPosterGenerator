@@ -794,30 +794,64 @@ input[type="range"]::-moz-range-thumb {
   opacity: 0.5;
 }
 
-/* --- Leaflet adjustments ------------------------------------- */
+/* --- MapLibre adjustments ------------------------------------ */
 
-.leaflet-container {
+.maplibregl-map {
   background: var(--paper);
   font-family: var(--font-sans);
 }
-.leaflet-control-zoom {
+.maplibregl-canvas {
+  outline: none;
+}
+.maplibregl-ctrl-group {
   border: 0 !important;
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15) !important;
+  background: var(--paper) !important;
 }
-.leaflet-control-zoom a {
+.maplibregl-ctrl-group button {
   background: var(--paper) !important;
   color: var(--ink) !important;
-  border-color: var(--rule-paper) !important;
 }
-.leaflet-control-attribution {
+.maplibregl-ctrl-group button:hover {
+  background: var(--bg-input) !important;
+}
+.maplibregl-ctrl-group button + button {
+  border-top: 1px solid var(--rule-paper) !important;
+}
+.maplibregl-ctrl-attrib {
   background: rgba(246, 241, 230, 0.85) !important;
   font-family: var(--font-mono);
   font-size: 9px !important;
   color: var(--ink-soft) !important;
   padding: 2px 6px !important;
 }
-.leaflet-control-attribution a {
+.maplibregl-ctrl-attrib a {
   color: var(--ink-soft) !important;
+}
+.maplibregl-ctrl-attrib-button {
+  display: none !important;
+}
+
+/* Peak hover highlight — replaces Leaflet's circleMarker. Center-
+   anchored marker, so just style as a centered ring. */
+.peak-highlight {
+  width: 28px;
+  height: 28px;
+  border: 2px solid #000;
+  border-radius: 50%;
+  background: rgba(255, 212, 0, 0.6);
+  pointer-events: none;
+}
+
+/* Print snapshot — when the high-DPI render is overlaid for printing,
+   hide the live canvas underneath so the print buffer only has the
+   high-resolution image. */
+.poster__map.printing .maplibregl-canvas-container,
+.poster__map.printing .maplibregl-control-container {
+  visibility: hidden;
+}
+.poster__map-print {
+  display: block;
 }
 
 /* --- Pins ---------------------------------------------------- */
@@ -825,24 +859,58 @@ input[type="range"]::-moz-range-thumb {
 .pin-wrap {
   pointer-events: none;
 }
+/* MapLibre Marker with `anchor: 'bottom'` positions the marker
+   container (pin-wrap) so its bottom-center sits at the lng/lat. The
+   inner .pin therefore needs no transform — that used to be Leaflet's
+   job, now MapLibre handles it via the wrapper's transform. */
 .pin {
+  --pin-fill: var(--ink);
+  --pin-stroke: var(--paper);
   position: relative;
-  transform: translate(-50%, -100%);
   text-align: center;
   white-space: nowrap;
   color: var(--ink);
 }
-.pin__tri {
+.pin__glyph {
   display: block;
-  width: 11px;
-  height: 10px;
   margin: 0 auto;
   filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.18));
 }
-.pin__tri polygon {
-  fill: var(--ink);
-  stroke: var(--paper);
-  transition: fill 0.15s, stroke 0.15s;
+.pin__glyph svg {
+  display: block;
+  width: 11px;
+  height: 11px;
+  overflow: visible;
+}
+/* Per-icon coloring. Outline variants fill the body so labels behind
+   stay legible; line variants leave the body open. */
+.pin--triangle .pin__glyph polygon {
+  fill: var(--pin-fill);
+  stroke: var(--pin-stroke);
+}
+.pin--triangle-fill .pin__glyph polygon {
+  fill: var(--pin-fill);
+  stroke: none;
+}
+.pin--mountain .pin__glyph polygon {
+  fill: var(--pin-fill);
+  stroke: var(--pin-stroke);
+}
+.pin--bench .pin__glyph circle,
+.pin--bench .pin__glyph line {
+  stroke: var(--pin-fill);
+  fill: none;
+  stroke-linecap: round;
+}
+.pin--spot-height .pin__glyph line {
+  stroke: var(--pin-fill);
+  stroke-linecap: round;
+}
+.pin--spot-height .pin__glyph circle {
+  fill: var(--pin-fill);
+}
+.pin--dot .pin__glyph circle {
+  fill: var(--pin-fill);
 }
 .pin__label {
   display: inline-flex;
@@ -887,12 +955,13 @@ input[type="range"]::-moz-range-thumb {
 }
 
 /* When the basemap is dark (Dark minimal, Satellite, etc.), flip the
-   ink/paper roles so triangles and labels stay legible. */
-.map--dark-base .pin__tri polygon {
-  fill: var(--paper);
-  stroke: var(--ink);
+   ink/paper roles so the glyphs and labels stay legible. The picker
+   swatches still use the light tone since they sit in the dark panel. */
+.map--dark-base .pin {
+  --pin-fill: var(--paper);
+  --pin-stroke: var(--ink);
 }
-.map--dark-base .pin__tri {
+.map--dark-base .pin__glyph {
   filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.6));
 }
 .map--dark-base .pin__name {
@@ -911,6 +980,88 @@ input[type="range"]::-moz-range-thumb {
     1px -1px 0 var(--ink),
     -1px 1px 0 var(--ink),
     1px 1px 0 var(--ink);
+}
+
+/* --- Contour pane blending -------------------------------------- */
+/* The contour pane sits above the base tile pane and uses multiply
+   blending so any white-on-tile backdrop drops out, leaving just the
+   topographic linework composited cleanly over the basemap below. */
+.contour-pane {
+  mix-blend-mode: multiply;
+}
+.contour-tile--blend {
+  filter: contrast(1.15) saturate(0.55);
+}
+
+/* --- Icon picker (Style panel) --------------------------------- */
+
+.icon-picker {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 4px;
+}
+.icon-picker__opt {
+  /* Reset .pin's positioning so the picker swatches sit in their cells
+     instead of trying to anchor over a (non-existent) map point. */
+  position: relative;
+  transform: none;
+  width: 100%;
+  padding: 8px 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-input);
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  cursor: pointer;
+  /* Force light-on-dark contrast inside the dark panel regardless of
+     basemap tone. */
+  --pin-fill: var(--text);
+  --pin-stroke: var(--bg-panel);
+  color: var(--text);
+  transition: border-color 0.1s, background 0.1s;
+}
+.icon-picker__opt:hover {
+  border-color: var(--text-dim);
+  background: var(--bg-panel-elev);
+}
+.icon-picker__opt--on {
+  border-color: var(--accent);
+  --pin-fill: var(--accent);
+  background: var(--accent-soft);
+}
+.icon-picker__opt .pin__glyph {
+  filter: none;
+}
+.icon-picker__opt .pin__glyph svg {
+  width: 16px;
+  height: 16px;
+}
+
+/* --- Color row (paper picker) ---------------------------------- */
+.color-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.color-row input[type="color"] {
+  width: 32px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  background: var(--bg-input);
+  cursor: pointer;
+}
+.color-row input[type="color"]::-webkit-color-swatch-wrapper {
+  padding: 2px;
+}
+.color-row input[type="color"]::-webkit-color-swatch {
+  border: 0;
+  border-radius: 2px;
+}
+.color-row .field__value {
+  font-family: var(--font-mono);
 }
 
 /* --- Responsive ---------------------------------------------- */
