@@ -947,13 +947,6 @@ input[type="range"]::-moz-range-thumb {
     -1px 1px 0 var(--paper),
     1px 1px 0 var(--paper);
 }
-.pin--dim {
-  opacity: 0.32;
-}
-.pin--dim .pin__label {
-  display: none;
-}
-
 /* When the basemap is dark (Dark minimal, Satellite, etc.), flip the
    ink/paper roles so the glyphs and labels stay legible. The picker
    swatches still use the light tone since they sit in the dark panel. */
