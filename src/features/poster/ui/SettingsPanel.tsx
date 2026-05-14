@@ -207,10 +207,17 @@ export default function SettingsPanel({
 
   return (
     <form className="settings-panel" onSubmit={(e) => e.preventDefault()}>
-      {accordionSections.map(({ id, label, Icon }) => (
+      {accordionSections.map(({ id, label, Icon }) => {
+        const sectionClass =
+          id === "theme"
+            ? "theme-settings"
+            : id === "layout"
+              ? "layout-settings"
+              : id;
+        return (
         <div
           key={id}
-          className={`mobile-section mobile-section--${id} accordion-item${openSections.has(id) ? " accordion-item--open" : ""}`}
+          className={`mobile-section mobile-section--${sectionClass} accordion-item${openSections.has(id) ? " accordion-item--open" : ""}`}
         >
           <AccordionHeader
             sectionId={id}
@@ -225,7 +232,8 @@ export default function SettingsPanel({
             <div className="accordion-body-inner">{renderSection(id)}</div>
           </div>
         </div>
-      ))}
+        );
+      })}
 
       {!isAuxEditorActive && state.error ? (
         <p className="error">{state.error}</p>

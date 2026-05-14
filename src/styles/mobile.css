@@ -1452,6 +1452,27 @@
     display: none;
   }
 
+  /* Peaks tab: show only the peaks section */
+  [data-mobile-tab="peaks"] .mobile-section:not(.mobile-section--peaks) {
+    display: none;
+  }
+
+  /* Topo tab: show only the topo section */
+  [data-mobile-tab="topo"] .mobile-section:not(.mobile-section--topo) {
+    display: none;
+  }
+
+  /* Custom-layers tab: show only the custom-layers section */
+  [data-mobile-tab="customLayers"]
+    .mobile-section:not(.mobile-section--customLayers) {
+    display: none;
+  }
+
+  /* Export tab: show only the export section */
+  [data-mobile-tab="export"] .mobile-section:not(.mobile-section--export) {
+    display: none;
+  }
+
   /* ── Mobile section animations ── */
 
   .mobile-section {
