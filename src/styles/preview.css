@@ -1,0 +1,477 @@
+.poster-viewport {
+  position: relative;
+  min-height: 850px;
+  border-radius: 14px;
+  border: 1px solid var(--strong-line);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.06), transparent 28%),
+    radial-gradient(
+      circle at 82% 16%,
+      rgba(77, 161, 201, 0.28),
+      transparent 32%
+    ),
+    linear-gradient(145deg, rgba(14, 33, 46, 0.96), rgba(11, 26, 38, 0.9));
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+}
+
+.poster-viewport::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    linear-gradient(rgba(130, 170, 197, 0.1) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(130, 170, 197, 0.1) 1px, transparent 1px);
+  background-size: 26px 26px;
+}
+
+/* ── Poster frame ── */
+
+.poster-frame {
+  position: relative;
+  z-index: 1;
+  aspect-ratio: var(--poster-aspect, 2 / 3);
+  width: min(100%, calc(82vh * var(--poster-aspect, 0.6666667)));
+  max-width: 100%;
+  max-height: 82vh;
+  overflow: hidden;
+  border-radius: 4px;
+  border: 1px solid rgba(179, 210, 230, 0.28);
+  box-shadow:
+    0 24px 34px rgba(0, 0, 0, 0.5),
+    0 8px 14px rgba(0, 0, 0, 0.42);
+}
+
+/* ── Ghost canvas: covers ghost layer, preserving poster aspect ratio ── */
+
+.poster-ghost-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center;
+}
+
+/* ── MapLibre container ── */
+
+.map-container {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  overflow: hidden;
+}
+
+/* hide MapLibre's default attribution & logo */
+.map-container .maplibregl-control-container {
+  display: none;
+}
+
+/* ── Gradient fades ── */
+
+.poster-fade {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 25%;
+  pointer-events: none;
+  z-index: 2;
+}
+
+.poster-fade--top {
+  top: 0;
+}
+
+.poster-fade--bottom {
+  bottom: 0;
+}
+
+/* ── Text overlay ── */
+
+.poster-text-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 4;
+  container-type: size;
+}
+
+.poster-marker-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  pointer-events: none;
+}
+
+.poster-route-endpoints {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.poster-route-endpoint {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+.poster-marker-overlay.is-edit-mode {
+  pointer-events: auto;
+  touch-action: none;
+  overscroll-behavior: contain;
+}
+
+.poster-marker {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+.poster-marker.is-draggable {
+  pointer-events: auto;
+  cursor: grab;
+  touch-action: none;
+}
+
+.poster-marker.is-draggable.is-dragging {
+  cursor: grabbing;
+}
+
+.poster-marker.is-selected {
+  filter: none;
+}
+
+.poster-marker.is-selected .marker-visual {
+  border: 2px solid var(--marker-highlight-color, rgba(94, 206, 255, 0.9));
+  border-radius: 999px;
+  box-shadow: 0 0 0 1px rgba(7, 16, 24, 0.68);
+}
+
+.poster-city {
+  position: absolute;
+  left: 0;
+  right: 0;
+  margin: 0;
+  font-weight: 700;
+  text-transform: uppercase;
+  text-align: center;
+  line-height: 1.1;
+  transform: translateY(-50%);
+  white-space: pre-wrap;
+}
+
+.poster-divider {
+  position: absolute;
+  left: 40%;
+  right: 40%;
+  border: 0;
+  border-top: 2px solid currentcolor;
+  height: 0;
+  margin: 0;
+  transform: translateY(-50%);
+}
+
+.poster-country {
+  position: absolute;
+  left: 0;
+  right: 0;
+  margin: 0;
+  font-weight: 300;
+  font-size: 2.6cqh;
+  text-transform: uppercase;
+  text-align: center;
+  line-height: 1.2;
+  transform: translateY(-50%);
+}
+
+.poster-coords {
+  position: absolute;
+  left: 0;
+  right: 0;
+  margin: 0;
+  font-family: "Spline Sans Mono", monospace;
+  font-weight: 400;
+  font-size: 1.6cqh;
+  text-align: center;
+  opacity: 0.75;
+  transform: translateY(-50%);
+}
+
+.poster-attribution {
+  position: absolute;
+  font-family: "Spline Sans Mono", monospace;
+  font-weight: 300;
+  font-size: 0.85cqh;
+  text-align: right;
+  opacity: 0.55;
+}
+
+.poster-credits {
+  position: absolute;
+  font-family: "Spline Sans Mono", monospace;
+  font-weight: 300;
+  font-size: 0.85cqh;
+  text-align: left;
+  opacity: 0.55;
+}
+
+@media (max-width: 980px) {
+  .poster-viewport {
+    min-height: 400px;
+  }
+
+  .poster-frame {
+    width: min(100%, calc(68vh * var(--poster-aspect, 0.6666667)));
+    max-height: 68vh;
+  }
+}
+
+/* ── Map editing controls ── */
+
+.map-controls {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+.map-controls-section {
+  margin-top: 5px;
+}
+
+.map-control-group {
+  display: flex;
+  flex-wrap: nowrap;
+  justify-content: center;
+  gap: 6px;
+  align-items: center;
+}
+
+.map-control-slider-row {
+  width: min(560px, 100%);
+  display: grid;
+  grid-template-columns: auto minmax(180px, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.map-control-slider {
+  width: 100%;
+  height: 7px;
+  margin: 0;
+  border-radius: 999px;
+  -webkit-appearance: none;
+  appearance: none;
+  background: linear-gradient(
+    90deg,
+    rgba(69, 140, 184, 0.75),
+    rgba(55, 171, 203, 0.95)
+  );
+  border: 1px solid rgba(137, 176, 200, 0.35);
+  box-shadow: inset 0 0 0 1px rgba(8, 18, 28, 0.28);
+}
+
+.map-control-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 1px solid rgba(206, 233, 250, 0.85);
+  background: #d5e7f5;
+  box-shadow:
+    0 0 0 2px rgba(11, 26, 38, 0.5),
+    0 2px 6px rgba(0, 0, 0, 0.35);
+  cursor: pointer;
+}
+
+.map-control-slider::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 1px solid rgba(206, 233, 250, 0.85);
+  background: #d5e7f5;
+  box-shadow:
+    0 0 0 2px rgba(11, 26, 38, 0.5),
+    0 2px 6px rgba(0, 0, 0, 0.35);
+  cursor: pointer;
+}
+
+.map-control-slider::-moz-range-track {
+  height: 7px;
+  border-radius: 999px;
+  background: linear-gradient(
+    90deg,
+    rgba(69, 140, 184, 0.75),
+    rgba(55, 171, 203, 0.95)
+  );
+  border: 1px solid rgba(137, 176, 200, 0.35);
+}
+
+.map-control-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 12px;
+  border: 1px solid rgba(137, 176, 200, 0.32);
+  border-radius: 8px;
+  background: rgba(14, 33, 46, 0.85);
+  color: #d5e7f5;
+  font-family: "Spline Sans Mono", monospace;
+  font-size: 0.78rem;
+  cursor: pointer;
+  transition:
+    background 0.15s,
+    border-color 0.15s;
+}
+
+.map-control-btn:hover:not(:disabled) {
+  background: rgba(37, 75, 105, 0.7);
+  border-color: rgba(137, 176, 200, 0.55);
+}
+
+.map-control-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.map-control-btn--primary {
+  background: rgba(55, 171, 203, 0.22);
+  border-color: rgba(55, 171, 203, 0.55);
+}
+
+.map-control-btn--primary:hover:not(:disabled) {
+  background: rgba(55, 171, 203, 0.38);
+}
+
+.map-control-btn--mode {
+  min-width: 120px;
+  justify-content: center;
+}
+
+.map-control-btn--marker-toggle {
+  min-width: 150px;
+  justify-content: center;
+}
+
+.map-control-btn.is-active {
+  background: rgba(55, 171, 203, 0.34);
+  border-color: rgba(55, 171, 203, 0.8);
+}
+
+.map-control-btn--marker-reset {
+  background: rgba(73, 45, 34, 0.84);
+  border-color: rgba(255, 177, 142, 0.58);
+  color: #ffd7c2;
+}
+
+.map-control-btn--marker-reset:hover:not(:disabled) {
+  background: rgba(96, 58, 43, 0.92);
+  border-color: rgba(255, 177, 142, 0.85);
+}
+
+.map-control-btn--danger {
+  background: rgba(82, 44, 36, 0.82);
+  border-color: rgba(255, 152, 129, 0.44);
+  color: #ffd5cb;
+}
+
+.map-control-btn--danger:hover:not(:disabled) {
+  background: rgba(97, 53, 44, 0.92);
+  border-color: rgba(255, 152, 129, 0.72);
+}
+
+.map-control-hint {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin: 0;
+  padding: 4px 8px;
+  border-radius: 7px;
+  background: rgba(8, 18, 28, 0.42);
+  font-family: "Spline Sans Mono", monospace;
+  font-size: 0.7rem;
+  color: rgba(156, 195, 218, 0.7);
+  text-align: center;
+  white-space: pre-line;
+}
+
+.map-control-hint-icon {
+  flex-shrink: 0;
+  font-size: 0.8em;
+}
+
+.settings-info-card {
+  margin: 10px;
+  padding: 12px;
+  border: 1px solid rgba(137, 176, 200, 0.3);
+  border-radius: 10px;
+  background: rgba(10, 24, 35, 0.72);
+  color: #d5e7f5;
+}
+
+.settings-info-title {
+  margin: 0 0 8px;
+  font-size: 0.82rem;
+  font-family: "Spline Sans Mono", monospace;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: rgba(188, 219, 238, 0.9);
+}
+
+.settings-info-list {
+  margin: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 8px 14px;
+}
+
+.settings-info-row {
+  margin: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.settings-info-row dt {
+  margin: 0;
+  font-family: "Spline Sans Mono", monospace;
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: rgba(156, 195, 218, 0.72);
+}
+
+.settings-info-row dd {
+  margin: 0;
+  font-size: 0.86rem;
+  color: #e1eff9;
+}
+
+@media (max-width: 700px) {
+  .map-control-group {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+
+  .map-control-btn {
+    min-height: 38px;
+    padding: 8px 10px;
+    font-size: 0.74rem;
+  }
+
+  .map-control-btn--mode,
+  .map-control-btn--marker-toggle {
+    min-width: 0;
+    justify-content: flex-start;
+  }
+
+  .map-control-hint {
+    font-size: 0.65rem;
+  }
+
+  .map-control-slider-row {
+    grid-template-columns: auto minmax(120px, 1fr) auto;
+  }
+}
