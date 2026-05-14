@@ -98,16 +98,18 @@ export const DEFAULT_FORM: PosterForm = {
   contourDensity: 60,
   contourLabels: true,
   showPeaks: true,
-  showPeakLabels: true,
-  showPeakElevation: true,
-  // Sensible defaults so the preview doesn't open with a wall of overlapping
-  // peak triangles. Users tune these in the Peaks panel.
+  // Legend mode: map shows numbered triangles, names + elevations live in
+  // the right-margin legend. Per-peak name/elevation labels are off by
+  // default to keep the map readable.
+  showPeakLabels: false,
+  showPeakElevation: false,
+  showPeakLegend: true,
   peakRequireName: true,
   peakRequireEle: true,
   peakElevationMin: 2000,
   peakElevationMax: 30000,
   peakElevationUnit: "ft",
-  peakTopN: 50,
+  peakTopN: 46,
   showCustomLayers: true,
   exportDpi: 300,
 };

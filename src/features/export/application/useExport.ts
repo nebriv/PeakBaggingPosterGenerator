@@ -160,6 +160,7 @@ export function useExport() {
           peakUnit: form.peakElevationUnit,
           showPeakLabels: form.showPeakLabels,
           showPeakElevation: form.showPeakElevation,
+          showPeakLegend: form.showPeakLegend,
         });
 
         const filename = createPosterFilename(

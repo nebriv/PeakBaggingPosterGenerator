@@ -3,7 +3,10 @@ import { drawPosterText } from "./typography";
 import { drawMarkersOnCanvas } from "@/features/markers/infrastructure/rendering";
 import { drawRoutesOnCanvas } from "@/features/routes/infrastructure/rendering";
 import { routeEndpointMarkerItems } from "@/features/routes/infrastructure/helpers";
-import { drawPeaksOnCanvas } from "@/features/peaks/infrastructure/rendering";
+import {
+  drawPeaksOnCanvas,
+  drawPeakLegendOnCanvas,
+} from "@/features/peaks/infrastructure/rendering";
 import type { ExportOptions, CanvasSize } from "../../domain/types";
 
 /**
@@ -41,6 +44,7 @@ export async function compositeExport(
     peakUnit = "ft",
     showPeakLabels = true,
     showPeakElevation = true,
+    showPeakLegend = false,
   } = options;
 
   const width = mapCanvas.width;
@@ -102,7 +106,8 @@ export async function compositeExport(
     );
   }
 
-  // 5b. Peak triangles + labels (on top of markers so they remain legible).
+  // 5b. Peak triangles, optional number badges, and optional inline labels
+  // (on top of markers so they remain legible).
   if (peaks.length > 0 && markerProjection) {
     drawPeaksOnCanvas(ctx, {
       peaks,
@@ -112,8 +117,22 @@ export async function compositeExport(
       sizeScale: markerSizeScale,
       textColor: theme.ui.text,
       haloColor: theme.ui.bg,
-      showLabels: showPeakLabels,
-      showElevation: showPeakElevation,
+      showNumbers: showPeakLegend,
+      showInlineName: showPeakLabels,
+      showInlineElevation: showPeakElevation,
+      unit: peakUnit,
+      fontFamily: fontFamily || undefined,
+    });
+  }
+
+  // 5c. Right-margin legend panel.
+  if (peaks.length > 0 && showPeakLegend) {
+    drawPeakLegendOnCanvas(ctx, {
+      peaks,
+      canvasWidth: width,
+      canvasHeight: height,
+      textColor: theme.ui.text,
+      paperColor: theme.ui.bg,
       unit: peakUnit,
       fontFamily: fontFamily || undefined,
     });
