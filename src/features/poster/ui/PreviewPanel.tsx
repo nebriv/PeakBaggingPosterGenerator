@@ -10,6 +10,7 @@ import { useMapSync } from "@/features/map/application/useMapSync";
 import MapPreview from "@/features/map/ui/MapPreview";
 import MarkerOverlay from "@/features/markers/ui/MarkerOverlay";
 import PeakOverlay from "@/features/peaks/ui/PeakOverlay";
+import PeakLegendOverlay from "@/features/peaks/ui/PeakLegendOverlay";
 import { usePeakFetch } from "@/features/peaks/application/usePeakFetch";
 import RouteOverlay from "@/features/routes/ui/RouteOverlay";
 import RouteEndpointsOverlay from "@/features/routes/ui/RouteEndpointsOverlay";
@@ -444,6 +445,7 @@ export default function PreviewPanel() {
             />
           ) : null}
           <PeakOverlay overzoomScale={overzoomScale} />
+          <PeakLegendOverlay />
           <PosterTextOverlay
             city={cityLabel}
             country={countryLabel}

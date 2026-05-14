@@ -65,6 +65,9 @@ export interface PosterForm {
   peakElevationMax: number;
   peakElevationUnit: "ft" | "m";
   peakTopN: number;
+  // Render a numbered legend in the right margin of the poster instead of
+  // (or alongside) drawing names on the map.
+  showPeakLegend: boolean;
   // Custom user overlays toggle.
   showCustomLayers: boolean;
   // Export DPI.

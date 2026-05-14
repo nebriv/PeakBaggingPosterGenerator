@@ -5,6 +5,7 @@ import type { PeakItem } from "../domain/types";
 
 interface ProjectedPeak {
   peak: PeakItem;
+  index: number;
   x: number;
   y: number;
 }
@@ -52,12 +53,13 @@ export default function PeakOverlay({ overzoomScale }: PeakOverlayProps) {
   const projected: ProjectedPeak[] = useMemo(() => {
     const map = mapRef.current;
     if (!map) return [];
-    return filtered.flatMap((peak) => {
+    return filtered.flatMap((peak, index) => {
       try {
         const point = map.project([peak.lon, peak.lat]);
         return [
           {
             peak,
+            index: index + 1,
             x: point.x / overzoomScale,
             y: point.y / overzoomScale,
           },
@@ -74,6 +76,9 @@ export default function PeakOverlay({ overzoomScale }: PeakOverlayProps) {
 
   const labelColor = effectiveTheme.ui.text;
   const haloColor = effectiveTheme.ui.bg;
+  const showNumberBadge = state.form.showPeakLegend;
+  const showInlineName = state.form.showPeakLabels;
+  const showInlineElevation = state.form.showPeakElevation;
 
   return (
     <div
@@ -86,16 +91,18 @@ export default function PeakOverlay({ overzoomScale }: PeakOverlayProps) {
         zIndex: 4,
       }}
     >
-      {projected.map(({ peak, x, y }) => (
+      {projected.map(({ peak, index, x, y }) => (
         <PeakGlyph
           key={peak.id}
           peak={peak}
+          index={index}
           x={x}
           y={y}
           labelColor={labelColor}
           haloColor={haloColor}
-          showLabel={state.form.showPeakLabels}
-          showElevation={state.form.showPeakElevation}
+          showNumberBadge={showNumberBadge}
+          showInlineName={showInlineName}
+          showInlineElevation={showInlineElevation}
           unit={state.form.peakElevationUnit}
         />
       ))}
@@ -105,23 +112,27 @@ export default function PeakOverlay({ overzoomScale }: PeakOverlayProps) {
 
 interface PeakGlyphProps {
   peak: PeakItem;
+  index: number;
   x: number;
   y: number;
   labelColor: string;
   haloColor: string;
-  showLabel: boolean;
-  showElevation: boolean;
+  showNumberBadge: boolean;
+  showInlineName: boolean;
+  showInlineElevation: boolean;
   unit: "ft" | "m";
 }
 
 function PeakGlyph({
   peak,
+  index,
   x,
   y,
   labelColor,
   haloColor,
-  showLabel,
-  showElevation,
+  showNumberBadge,
+  showInlineName,
+  showInlineElevation,
   unit,
 }: PeakGlyphProps) {
   const wrapperStyle: CSSProperties = {
@@ -130,9 +141,9 @@ function PeakGlyph({
     top: `${y}px`,
     transform: "translate(-50%, -100%)",
     display: "flex",
-    flexDirection: "column",
-    alignItems: "center",
-    gap: 2,
+    flexDirection: "row",
+    alignItems: "flex-end",
+    gap: 3,
     fontFamily: "var(--peak-font-family, inherit)",
   };
 
@@ -144,21 +155,29 @@ function PeakGlyph({
     letterSpacing: "0.02em",
     textShadow: `0 0 3px ${haloColor}, 0 0 3px ${haloColor}, 0 0 6px ${haloColor}`,
     whiteSpace: "nowrap",
-    textAlign: "center",
-    maxWidth: 140,
+  };
+
+  const badgeStyle: CSSProperties = {
+    fontFamily: '"Space Grotesk", "Inter", sans-serif',
+    fontWeight: 700,
+    fontSize: "9px",
+    lineHeight: 1,
+    padding: "2px 4px",
+    borderRadius: "2px",
+    background: labelColor,
+    color: haloColor,
+    boxShadow: `0 0 0 1px ${haloColor}`,
   };
 
   return (
     <div style={wrapperStyle}>
-      {showLabel && (peak.name || (showElevation && peak.eleMeters != null)) ? (
-        <div style={labelStyle}>
-          {peak.name ? <div>{peak.name}</div> : null}
-          {showElevation && peak.eleMeters != null ? (
-            <div style={{ opacity: 0.8 }}>{displayElevation(peak, unit)}</div>
-          ) : null}
-        </div>
-      ) : null}
-      <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
+      <svg
+        width="12"
+        height="12"
+        viewBox="0 0 14 14"
+        aria-hidden="true"
+        style={{ flexShrink: 0 }}
+      >
         <polygon
           points="7,1 13,12 1,12"
           fill={labelColor}
@@ -167,6 +186,18 @@ function PeakGlyph({
           strokeLinejoin="round"
         />
       </svg>
+      {showNumberBadge ? <span style={badgeStyle}>{index}</span> : null}
+      {showInlineName && peak.name ? (
+        <span style={labelStyle}>
+          {peak.name}
+          {showInlineElevation && peak.eleMeters != null ? (
+            <span style={{ opacity: 0.8 }}>
+              {" "}
+              {displayElevation(peak, unit)}
+            </span>
+          ) : null}
+        </span>
+      ) : null}
     </div>
   );
 }

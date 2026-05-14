@@ -39,6 +39,7 @@ export interface ExportOptions {
   peakUnit?: "ft" | "m";
   showPeakLabels?: boolean;
   showPeakElevation?: boolean;
+  showPeakLegend?: boolean;
 }
 
 export interface Typography {

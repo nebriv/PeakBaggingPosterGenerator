@@ -146,10 +146,18 @@ export default function PeaksSection() {
         <label className="form-toggle">
           <input
             type="checkbox"
+            checked={state.form.showPeakLegend}
+            onChange={(e) => setField("showPeakLegend", e.target.checked)}
+          />
+          <span>Show legend (numbered list in right margin)</span>
+        </label>
+        <label className="form-toggle">
+          <input
+            type="checkbox"
             checked={state.form.showPeakLabels}
             onChange={(e) => setField("showPeakLabels", e.target.checked)}
           />
-          <span>Show peak names</span>
+          <span>Also label peaks on the map</span>
         </label>
         <label className="form-toggle">
           <input
@@ -157,7 +165,7 @@ export default function PeaksSection() {
             checked={state.form.showPeakElevation}
             onChange={(e) => setField("showPeakElevation", e.target.checked)}
           />
-          <span>Show elevation on labels</span>
+          <span>Include elevation on map labels</span>
         </label>
       </fieldset>
 
