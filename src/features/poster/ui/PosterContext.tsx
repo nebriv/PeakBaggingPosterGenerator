@@ -106,7 +106,7 @@ export const DEFAULT_FORM: PosterForm = {
   showPeakLegend: true,
   peakRequireName: true,
   peakRequireEle: true,
-  peakElevationMin: 0,
+  peakElevationMin: 2000,
   peakElevationMax: 30000,
   peakElevationUnit: "ft",
   peakTopN: 46,

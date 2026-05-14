@@ -689,6 +689,30 @@
     display: none;
   }
 
+  [data-desktop-tab="peaks"]
+    .desktop-settings-slide
+    .mobile-section:not(.mobile-section--peaks) {
+    display: none;
+  }
+
+  [data-desktop-tab="topo"]
+    .desktop-settings-slide
+    .mobile-section:not(.mobile-section--topo) {
+    display: none;
+  }
+
+  [data-desktop-tab="customLayers"]
+    .desktop-settings-slide
+    .mobile-section:not(.mobile-section--customLayers) {
+    display: none;
+  }
+
+  [data-desktop-tab="export"]
+    .desktop-settings-slide
+    .mobile-section:not(.mobile-section--export) {
+    display: none;
+  }
+
   /* ── Preview panel: full-screen map area ── */
 
   .app-shell > .preview-panel {

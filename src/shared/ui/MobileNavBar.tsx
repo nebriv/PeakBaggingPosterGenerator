@@ -6,17 +6,25 @@ import {
   MarkersIcon,
   RouteIcon,
   StyleIcon,
+  PeaksIcon,
+  TopoIcon,
+  CustomLayerIcon,
+  ExportIcon,
   SettingsIcon,
 } from "./Icons";
 
 export type MobileTab =
   | "location"
+  | "peaks"
+  | "topo"
   | "theme"
   | "layout"
   | "style"
   | "layers"
+  | "customLayers"
   | "markers"
-  | "routes";
+  | "routes"
+  | "export";
 
 const tabs: {
   id: MobileTab;
@@ -24,12 +32,16 @@ const tabs: {
   Icon: React.ComponentType<{ className?: string }>;
 }[] = [
   { id: "location", label: "Location", Icon: LocationIcon },
+  { id: "peaks", label: "Peaks", Icon: PeaksIcon },
+  { id: "topo", label: "Topo", Icon: TopoIcon },
   { id: "theme", label: "Theme", Icon: ThemeIcon },
   { id: "layout", label: "Layout", Icon: LayoutIcon },
   { id: "style", label: "Style", Icon: StyleIcon },
-  { id: "layers", label: "Layers", Icon: LayersIcon },
+  { id: "layers", label: "Map layers", Icon: LayersIcon },
+  { id: "customLayers", label: "Custom", Icon: CustomLayerIcon },
   { id: "markers", label: "Markers", Icon: MarkersIcon },
   { id: "routes", label: "Routes", Icon: RouteIcon },
+  { id: "export", label: "Export", Icon: ExportIcon },
 ];
 
 interface MobileNavBarProps {
