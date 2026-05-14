@@ -149,7 +149,7 @@ export default function CustomLayersSection() {
                 </div>
                 <button
                   type="button"
-                  className="theme-card"
+                  className="pbpg-chip"
                   style={{ padding: "1px 6px", fontSize: 11 }}
                   onClick={() =>
                     dispatch({
@@ -174,14 +174,14 @@ export default function CustomLayersSection() {
         <div style={{ display: "flex", gap: "0.4rem" }}>
           <button
             type="button"
-            className={`theme-card${kind === "geojson" ? " is-selected" : ""}`}
+            className={`pbpg-chip${kind === "geojson" ? " is-active" : ""}`}
             onClick={() => setKind("geojson")}
           >
             GeoJSON
           </button>
           <button
             type="button"
-            className={`theme-card${kind === "raster" ? " is-selected" : ""}`}
+            className={`pbpg-chip${kind === "raster" ? " is-active" : ""}`}
             onClick={() => setKind("raster")}
           >
             Raster tiles
@@ -249,7 +249,7 @@ export default function CustomLayersSection() {
         <div style={{ display: "flex", justifyContent: "flex-end" }}>
           <button
             type="button"
-            className="theme-card is-selected"
+            className="pbpg-chip is-primary"
             onClick={handleAdd}
           >
             Add overlay

@@ -15,30 +15,28 @@ export default function PeakLegendOverlay() {
   const textColor = effectiveTheme.ui.text;
   const paperColor = effectiveTheme.ui.bg;
   const lineColor = effectiveTheme.ui.text;
+  // CSS multi-column lays the rows out automatically; each row is its own
+  // flex line that the browser won't break mid-content thanks to
+  // break-inside: avoid.
   const useTwoColumns = filtered.length > 24;
 
-  // Reserve top space for the city/country/coords text overlay so the legend
-  // doesn't collide with it. The text overlay lives in roughly the top ~22%
-  // of the poster.
   const panelStyle: CSSProperties = {
     position: "absolute",
     top: "23%",
     right: "3.5%",
     bottom: "3.5%",
-    width: "30%",
+    width: useTwoColumns ? "38%" : "30%",
     background: paperColor,
     color: textColor,
     border: `1px solid ${lineColor}`,
-    padding: "3.5cqmin 3cqmin",
+    padding: "3cqmin 3cqmin",
     fontFamily: '"Space Grotesk", "Inter", sans-serif',
-    fontSize: "1.6cqmin",
     lineHeight: 1.2,
     display: "flex",
     flexDirection: "column",
     overflow: "hidden",
     pointerEvents: "none",
     zIndex: 3,
-    boxShadow: "0 0 0 0.4cqmin rgba(0,0,0,0.04)",
   };
 
   const headerStyle: CSSProperties = {
@@ -46,32 +44,47 @@ export default function PeakLegendOverlay() {
     fontFamily: '"Space Grotesk", "Inter", sans-serif',
     fontWeight: 700,
     fontSize: "2.4cqmin",
-    letterSpacing: "0.06em",
+    letterSpacing: "0.08em",
     textTransform: "uppercase",
     textAlign: "center",
-    paddingBottom: "1.6cqmin",
+    paddingBottom: "1.4cqmin",
     borderBottom: `1px solid ${lineColor}`,
-    marginBottom: "1.6cqmin",
+    marginBottom: "1.4cqmin",
   };
 
-  const gridStyle: CSSProperties = {
+  const columnsStyle: CSSProperties = {
     flex: 1,
-    display: "grid",
-    gridTemplateColumns: useTwoColumns ? "1fr 1fr" : "1fr",
-    columnGap: "2cqmin",
-    rowGap: "0.6cqmin",
+    minHeight: 0,
     overflow: "hidden",
+    columnCount: useTwoColumns ? 2 : 1,
+    columnGap: "2cqmin",
+    columnRule: useTwoColumns
+      ? `1px solid color-mix(in srgb, ${lineColor} 35%, transparent)`
+      : "none",
+    fontSize: "1.55cqmin",
   };
 
   const rowStyle: CSSProperties = {
-    display: "grid",
-    gridTemplateColumns: "1.6em 1fr auto",
+    display: "flex",
     alignItems: "baseline",
-    columnGap: "0.6em",
-    minWidth: 0,
+    gap: "0.45em",
+    padding: "0.18em 0",
+    breakInside: "avoid",
+    pageBreakInside: "avoid",
+  };
+
+  const numberStyle: CSSProperties = {
+    fontWeight: 700,
+    fontVariantNumeric: "tabular-nums",
+    flexShrink: 0,
+    minWidth: "1.6em",
+    textAlign: "right",
+    opacity: 0.85,
   };
 
   const nameStyle: CSSProperties = {
+    flex: "1 1 auto",
+    minWidth: 0,
     overflow: "hidden",
     textOverflow: "ellipsis",
     whiteSpace: "nowrap",
@@ -79,16 +92,11 @@ export default function PeakLegendOverlay() {
   };
 
   const eleStyle: CSSProperties = {
+    flexShrink: 0,
     fontWeight: 400,
     fontVariantNumeric: "tabular-nums",
     opacity: 0.75,
-  };
-
-  const numberStyle: CSSProperties = {
-    fontWeight: 700,
-    fontVariantNumeric: "tabular-nums",
-    textAlign: "right",
-    opacity: 0.85,
+    whiteSpace: "nowrap",
   };
 
   return (
@@ -98,16 +106,16 @@ export default function PeakLegendOverlay() {
       aria-label="Peak legend"
     >
       <h2 style={headerStyle}>Peaks</h2>
-      <div style={gridStyle}>
+      <div style={columnsStyle}>
         {filtered.map((peak, index) => (
           <div key={peak.id} style={rowStyle}>
             <span style={numberStyle}>{index + 1}.</span>
             <span style={nameStyle}>{peak.name || "—"}</span>
-            <span style={eleStyle}>
-              {peak.eleMeters != null
-                ? displayElevation(peak, state.form.peakElevationUnit)
-                : ""}
-            </span>
+            {peak.eleMeters != null ? (
+              <span style={eleStyle}>
+                {displayElevation(peak, state.form.peakElevationUnit)}
+              </span>
+            ) : null}
           </div>
         ))}
       </div>

@@ -92,19 +92,12 @@ export default function PeaksSection() {
         style={{ border: 0, padding: 0, display: "grid", gap: "0.5rem" }}
       >
         <legend className="form-group-legend">Regions</legend>
-        <div
-          className="form-row"
-          style={{
-            display: "flex",
-            flexWrap: "wrap",
-            gap: "0.4rem",
-          }}
-        >
+        <div className="pbpg-chip-row">
           {REGION_PRESETS.map((preset) => (
             <button
               key={preset.id}
               type="button"
-              className="theme-card"
+              className="pbpg-chip"
               onClick={() => {
                 const [west, south, east, north] = preset.bbox;
                 const centerLat = (south + north) / 2;
@@ -220,17 +213,13 @@ export default function PeaksSection() {
           </label>
         </div>
         <div
-          className="form-row"
-          style={{
-            display: "flex",
-            gap: "0.4rem",
-            alignItems: "center",
-          }}
+          className="pbpg-chip-row"
+          style={{ alignItems: "center" }}
         >
-          <span>Unit</span>
+          <span style={{ fontSize: "0.8rem", opacity: 0.85 }}>Unit</span>
           <button
             type="button"
-            className={`theme-card${state.form.peakElevationUnit === "ft" ? " is-selected" : ""}`}
+            className={`pbpg-chip${state.form.peakElevationUnit === "ft" ? " is-active" : ""}`}
             onClick={() =>
               dispatch({
                 type: "SET_FORM_FIELDS",
@@ -242,7 +231,7 @@ export default function PeaksSection() {
           </button>
           <button
             type="button"
-            className={`theme-card${state.form.peakElevationUnit === "m" ? " is-selected" : ""}`}
+            className={`pbpg-chip${state.form.peakElevationUnit === "m" ? " is-active" : ""}`}
             onClick={() =>
               dispatch({
                 type: "SET_FORM_FIELDS",
@@ -342,8 +331,7 @@ export default function PeaksSection() {
               </span>
               <button
                 type="button"
-                className="theme-card"
-                style={{ padding: "1px 6px", fontSize: 11 }}
+                className="pbpg-chip pbpg-chip--xs"
                 onClick={() =>
                   dispatch({
                     type: "TOGGLE_PEAK_EXCLUDED",
@@ -357,8 +345,7 @@ export default function PeaksSection() {
               {peak.source === "custom" ? (
                 <button
                   type="button"
-                  className="theme-card"
-                  style={{ padding: "1px 6px", fontSize: 11 }}
+                  className="pbpg-chip pbpg-chip--xs"
                   onClick={() =>
                     dispatch({
                       type: "REMOVE_CUSTOM_PEAK",
@@ -442,14 +429,14 @@ export default function PeaksSection() {
         >
           <button
             type="button"
-            className="theme-card"
+            className="pbpg-chip"
             onClick={handleUseMapCenter}
           >
             Use map center
           </button>
           <button
             type="button"
-            className="theme-card is-selected"
+            className="pbpg-chip is-primary"
             onClick={handleAddCustomPeak}
           >
             Add peak
