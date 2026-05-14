@@ -100,12 +100,14 @@ export const DEFAULT_FORM: PosterForm = {
   showPeaks: true,
   showPeakLabels: true,
   showPeakElevation: true,
-  peakRequireName: false,
+  // Sensible defaults so the preview doesn't open with a wall of overlapping
+  // peak triangles. Users tune these in the Peaks panel.
+  peakRequireName: true,
   peakRequireEle: true,
-  peakElevationMin: 0,
+  peakElevationMin: 2000,
   peakElevationMax: 30000,
   peakElevationUnit: "ft",
-  peakTopN: 0,
+  peakTopN: 50,
   showCustomLayers: true,
   exportDpi: 300,
 };

@@ -77,14 +77,14 @@ export default function AppShell() {
       : null;
 
   // Mobile state
-  const [mobileTab, setMobileTab] = useState<MobileTab>("theme");
+  const [mobileTab, setMobileTab] = useState<MobileTab>("peaks");
   const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
   const [mobileLocationRowVisible, setMobileLocationRowVisible] =
     useState(true);
   const [isMobileViewport, setIsMobileViewport] = useState(false);
 
   // Desktop state
-  const [desktopTab, setDesktopTab] = useState<MobileTab>("theme");
+  const [desktopTab, setDesktopTab] = useState<MobileTab>("peaks");
   const [desktopPanelOpen, setDesktopPanelOpen] = useState(false);
   const [desktopLocationRowVisible, setDesktopLocationRowVisible] =
     useState(true);
