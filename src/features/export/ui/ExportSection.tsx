@@ -48,7 +48,7 @@ export default function ExportSection() {
       >
         <button
           type="button"
-          className="theme-card is-selected"
+          className="pbpg-chip is-primary"
           disabled={isExporting}
           onClick={handleDownloadPng}
         >
@@ -56,7 +56,7 @@ export default function ExportSection() {
         </button>
         <button
           type="button"
-          className="theme-card"
+          className="pbpg-chip"
           disabled={isExporting}
           onClick={handleDownloadPdf}
         >
@@ -64,7 +64,7 @@ export default function ExportSection() {
         </button>
         <button
           type="button"
-          className="theme-card"
+          className="pbpg-chip"
           disabled={isExporting}
           onClick={handleDownloadSvg}
         >

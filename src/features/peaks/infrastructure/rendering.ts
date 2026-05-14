@@ -176,16 +176,30 @@ export function drawPeakLegendOnCanvas(
     ? `"${fontFamily}", "Space Grotesk", sans-serif`
     : '"Space Grotesk", sans-serif';
 
-  const panelX = canvasWidth * 0.665;
-  const panelY = canvasHeight * 0.23;
-  const panelW = canvasWidth * 0.30;
-  const panelH = canvasHeight * 0.735;
-  const padX = canvasWidth * 0.012;
-  const padY = canvasHeight * 0.012;
+  // Decide one- vs two-column layout up front so the panel can widen when
+  // the list won't fit in a single column at our default row height.
   const dim = Math.min(canvasWidth, canvasHeight);
   const headerSize = dim * 0.024;
   const rowSize = dim * 0.0155;
   const rowLineHeight = rowSize * 1.45;
+
+  // Single-column inner-height budget at the default panel width is enough
+  // for ~36 rows on a 20×30cm poster at 300dpi. Once we exceed that, widen
+  // the panel and switch to two columns so names have more horizontal room.
+  const padX = canvasWidth * 0.012;
+  const padY = canvasHeight * 0.012;
+  const panelTopRatio = 0.23;
+  const panelBottomRatio = 0.965;
+  const panelH = canvasHeight * (panelBottomRatio - panelTopRatio);
+  const innerHForSizing =
+    panelH - padY * 2 - headerSize - headerSize * 0.45 - rowLineHeight * 0.6;
+  const rowsPerColumn = Math.max(1, Math.floor(innerHForSizing / rowLineHeight));
+  const useTwoColumns = peaks.length > rowsPerColumn;
+  const panelWidthRatio = useTwoColumns ? 0.38 : 0.30;
+  const panelRightRatio = 0.035;
+  const panelX = canvasWidth * (1 - panelRightRatio - panelWidthRatio);
+  const panelY = canvasHeight * panelTopRatio;
+  const panelW = canvasWidth * panelWidthRatio;
 
   ctx.save();
   // Panel background + frame.
@@ -213,14 +227,10 @@ export function drawPeakLegendOnCanvas(
   ctx.lineTo(panelX + panelW - padX, dividerY);
   ctx.stroke();
 
-  // List rows. Switch to two columns when the visible peak count exceeds
-  // what fits in a single column at the current row height.
+  // List rows.
   const innerX = panelX + padX;
   const innerY = dividerY + rowLineHeight * 0.6;
   const innerW = panelW - padX * 2;
-  const innerH = panelY + panelH - padY - innerY;
-  const rowsPerColumn = Math.max(1, Math.floor(innerH / rowLineHeight));
-  const useTwoColumns = peaks.length > rowsPerColumn;
   const columns = useTwoColumns ? 2 : 1;
   const columnGap = padX;
   const columnWidth = (innerW - columnGap * (columns - 1)) / columns;
@@ -236,11 +246,19 @@ export function drawPeakLegendOnCanvas(
     const baselineY = innerY + (rowInColumn + 1) * rowLineHeight - rowLineHeight * 0.25;
     const colX = innerX + column * (columnWidth + columnGap);
     const number = String(index + 1) + ".";
-    const numberWidth = columnWidth * 0.16;
+    // Tighter number column + reserved elevation slot proportional to the
+    // actual elevation string width so short names don't get over-trimmed.
+    ctx.font = `700 ${rowSize}px ${titleFamily}`;
+    const numberWidth = ctx.measureText(number).width + rowSize * 0.45;
     const eleString =
       peak.eleMeters != null ? displayElevation(peak, unit) : "";
-    const eleWidth = columnWidth * 0.34;
-    const nameMaxWidth = columnWidth - numberWidth - eleWidth - dim * 0.005;
+    ctx.font = `400 ${rowSize}px ${titleFamily}`;
+    const eleWidth = eleString ? ctx.measureText(eleString).width : 0;
+    const gapBetween = rowSize * 0.6;
+    const nameMaxWidth = Math.max(
+      columnWidth * 0.25,
+      columnWidth - numberWidth - eleWidth - gapBetween,
+    );
 
     // Number.
     ctx.font = `700 ${rowSize}px ${titleFamily}`;
