@@ -1,532 +1,59 @@
 <!doctype html>
 <html lang="en">
   <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover"
+    />
+    <link rel="icon" type="image/svg+xml" href="/assets/logo.svg" />
+    <link
+      rel="icon"
+      type="image/png"
+      sizes="32x32"
+      href="/assets/favicon-32.png"
+    />
+    <link
+      rel="icon"
+      type="image/png"
+      sizes="16x16"
+      href="/assets/favicon-16.png"
+    />
+    <link
+      rel="apple-touch-icon"
+      sizes="180x180"
+      href="/assets/apple-touch-icon.png"
+    />
+    <link rel="manifest" href="/site.webmanifest" />
     <title>Peak Bagging Poster Generator</title>
-    <link
-      rel="stylesheet"
-      href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css"
+
+    <meta
+      name="description"
+      content="Design a framable, topographic poster of any peak-bagging list — Adirondack 46ers, Catskill 3500, NH Whites, Colorado 14ers, and beyond. Vector-rendered, print-ready PNG/PDF/SVG."
     />
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      href="https://fonts.googleapis.com/css2?family=EB+Garamond:ital,wght@0,500;1,500;1,600&display=swap"
-      rel="stylesheet"
+    <meta name="robots" content="index, follow" />
+    <meta name="theme-color" content="#0a1824" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta
+      name="apple-mobile-web-app-status-bar-style"
+      content="black-translucent"
     />
-    <link rel="stylesheet" href="css/style.css" />
+    <meta name="apple-mobile-web-app-title" content="Peak Bagging Poster" />
+    <meta name="msapplication-TileColor" content="#0a1824" />
+    <link rel="mask-icon" href="/assets/logo.svg" color="#0a1824" />
+
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Peak Bagging Poster Generator" />
+    <meta property="og:title" content="Peak Bagging Poster Generator" />
+    <meta
+      property="og:description"
+      content="Topographic poster designer for peak-bagging lists. Live OSM peaks, DEM hillshade and contours, custom layers, and high-DPI export."
+    />
+    <meta name="twitter:card" content="summary_large_image" />
   </head>
   <body>
-    <div class="shell">
-      <!-- Top bar ----------------------------------------------------- -->
-      <header class="topbar">
-        <div class="topbar__brand">
-          <span class="topbar__mark" aria-hidden="true">▲</span>
-          <span class="topbar__name">Peak Bagging Poster</span>
-        </div>
-        <div class="topbar__meta" id="status">
-          <span class="topbar__chip" id="chip-peaks">0 peaks</span>
-          <span class="topbar__chip" id="chip-zoom">z—</span>
-          <span class="topbar__chip topbar__chip--state" id="chip-status">
-            ready
-          </span>
-        </div>
-        <div class="topbar__actions">
-          <div class="seg" role="group" aria-label="Units">
-            <button data-unit="ft" class="seg__btn seg__btn--on" id="unit-ft">
-              ft
-            </button>
-            <button data-unit="m" class="seg__btn" id="unit-m">m</button>
-          </div>
-          <button class="btn btn--ghost" id="toggle-panel" aria-expanded="true">
-            <span class="btn__icon" aria-hidden="true">⏷</span>
-            <span>Controls</span>
-          </button>
-          <button class="btn btn--solid" id="print">Print / PDF</button>
-        </div>
-      </header>
-
-      <!-- Main work area ---------------------------------------------- -->
-      <div class="work">
-        <!-- Control panel ------------------------------------------- -->
-        <aside class="panel" id="panel" aria-label="Poster controls">
-          <details class="panel__section" open>
-            <summary class="panel__summary">
-              <span>01</span> Region
-            </summary>
-            <div class="panel__body">
-              <label class="field">
-                <span class="field__label">Jump to a place</span>
-                <div class="combo">
-                  <input
-                    type="search"
-                    id="search-input"
-                    placeholder="e.g. Lake Placid, NY"
-                    autocomplete="off"
-                  />
-                  <button class="combo__btn" id="search-btn">Go</button>
-                </div>
-                <ul class="combo__results" id="search-results"></ul>
-              </label>
-              <div class="presets">
-                <button
-                  class="preset"
-                  data-bounds="43.85,-74.50,44.55,-73.55"
-                  data-zoom="10"
-                  data-label="Adirondack High Peaks"
-                >
-                  Adirondack HP
-                </button>
-                <button
-                  class="preset"
-                  data-bounds="41.85,-74.65,42.30,-74.10"
-                  data-zoom="11"
-                  data-label="Catskill 3500"
-                >
-                  Catskills
-                </button>
-                <button
-                  class="preset"
-                  data-bounds="43.95,-71.85,44.50,-71.10"
-                  data-zoom="10"
-                  data-label="White Mountains"
-                >
-                  White Mtns
-                </button>
-                <button
-                  class="preset"
-                  data-bounds="44.00,-72.95,44.60,-72.55"
-                  data-zoom="11"
-                  data-label="Green Mountains"
-                >
-                  Green Mtns
-                </button>
-                <button
-                  class="preset"
-                  data-bounds="35.40,-83.95,35.80,-83.20"
-                  data-zoom="10"
-                  data-label="Smokies"
-                >
-                  Smokies
-                </button>
-                <button
-                  class="preset"
-                  data-bounds="39.50,-106.60,40.30,-105.50"
-                  data-zoom="9"
-                  data-label="Front Range 14ers"
-                >
-                  Front Range
-                </button>
-              </div>
-            </div>
-          </details>
-
-          <details class="panel__section" open>
-            <summary class="panel__summary">
-              <span>02</span> Peaks
-            </summary>
-            <div class="panel__body">
-              <div class="field">
-                <div class="field__row">
-                  <span class="field__label">Elevation filter</span>
-                  <span class="field__value" id="elev-readout">— / —</span>
-                </div>
-                <div class="dual-slider" id="elev-slider">
-                  <input
-                    type="range"
-                    id="elev-min"
-                    min="0"
-                    max="9000"
-                    value="0"
-                    step="10"
-                  />
-                  <input
-                    type="range"
-                    id="elev-max"
-                    min="0"
-                    max="9000"
-                    value="9000"
-                    step="10"
-                  />
-                </div>
-                <p class="field__hint">
-                  Peaks outside this range are hidden from the map.
-                </p>
-              </div>
-
-              <label class="check">
-                <input type="checkbox" id="opt-require-name" />
-                <span>Only peaks with a name</span>
-              </label>
-              <label class="check">
-                <input type="checkbox" id="opt-require-ele" checked />
-                <span>Only peaks with elevation data</span>
-              </label>
-              <label class="check">
-                <input type="checkbox" id="opt-show-elev" checked />
-                <span>Show elevation on labels</span>
-              </label>
-              <label class="check">
-                <input type="checkbox" id="opt-show-labels" checked />
-                <span>Show peak names</span>
-              </label>
-
-              <label class="field">
-                <span class="field__label">
-                  Limit to top N peaks
-                  <span class="field__value" id="topn-readout">all</span>
-                </span>
-                <input
-                  type="range"
-                  id="opt-topn"
-                  min="0"
-                  max="200"
-                  value="0"
-                  step="1"
-                />
-                <p class="field__hint">
-                  0 = no limit. Otherwise only the N highest visible peaks are
-                  labeled.
-                </p>
-              </label>
-            </div>
-          </details>
-
-          <details class="panel__section">
-            <summary class="panel__summary">
-              <span>03</span> Style
-            </summary>
-            <div class="panel__body">
-              <label class="field">
-                <span class="field__label">Map style</span>
-                <select id="opt-map-style">
-                  <option value="hillshade-only" selected>
-                    Hillshade only — clean topo (no labels)
-                  </option>
-                  <option value="alidade_smooth">
-                    Alidade Smooth — light grayscale (Stadia)
-                  </option>
-                  <option value="alidade_smooth_dark">
-                    Alidade Smooth Dark (Stadia)
-                  </option>
-                  <option value="outdoors">
-                    Outdoors — trails &amp; topo (Stadia)
-                  </option>
-                  <option value="stamen_toner">
-                    Stamen Toner — high contrast B&amp;W
-                  </option>
-                  <option value="stamen_toner_lite">
-                    Stamen Toner Lite
-                  </option>
-                  <option value="osm_bright">OSM Bright (Stadia)</option>
-                  <option value="satellite">Satellite imagery (Esri)</option>
-                  <option value="paper">Paper only — no basemap</option>
-                </select>
-                <p class="field__hint">
-                  Vector basemaps are crisp at any print DPI. "Hillshade
-                  only" is built from open DEM data and renders as pure
-                  topographic shading with no labels.
-                </p>
-              </label>
-
-              <label class="field">
-                <span class="field__label">Peak icon</span>
-                <div class="icon-picker" id="icon-picker"></div>
-                <p class="field__hint">
-                  Classic topo symbols — pick what matches the poster's mood.
-                </p>
-              </label>
-
-              <label class="field">
-                <span class="field__label">Paper color</span>
-                <div class="color-row">
-                  <input type="color" id="opt-paper" value="#f6f1e6" />
-                  <span class="field__value" id="paper-readout">#f6f1e6</span>
-                </div>
-                <p class="field__hint">
-                  Sets the poster background and the map's untiled areas.
-                </p>
-              </label>
-              <label class="check">
-                <input type="checkbox" id="opt-blend-map" />
-                <span>Blend basemap into paper (multiply)</span>
-              </label>
-
-              <label class="check">
-                <input type="checkbox" id="opt-contours" checked />
-                <span>Contour lines</span>
-              </label>
-              <label class="field">
-                <span class="field__label">
-                  Contour density
-                  <span class="field__value" id="contour-readout">60%</span>
-                </span>
-                <input
-                  type="range"
-                  id="opt-contour-density"
-                  min="0"
-                  max="100"
-                  value="60"
-                />
-                <p class="field__hint">
-                  Generated client-side from open DEM data. Interval scales
-                  automatically with zoom.
-                </p>
-              </label>
-              <label class="check">
-                <input type="checkbox" id="opt-contour-labels" checked />
-                <span>Show elevation on major contours</span>
-              </label>
-
-              <label class="field">
-                <span class="field__label">
-                  Hillshade strength
-                  <span class="field__value" id="hill-readout">50%</span>
-                </span>
-                <input
-                  type="range"
-                  id="opt-hillshade"
-                  min="0"
-                  max="100"
-                  value="50"
-                />
-              </label>
-
-              <label class="field">
-                <span class="field__label">Print quality</span>
-                <select id="opt-print-dpi">
-                  <option value="1">1× — screen (fast)</option>
-                  <option value="2">2× — letter/tabloid prints</option>
-                  <option value="3" selected>
-                    3× — recommended for poster prints
-                  </option>
-                  <option value="4">4× — large-format prints (slow)</option>
-                </select>
-                <p class="field__hint">
-                  Print/PDF re-renders the map at this pixel ratio so the
-                  output is crisp at poster DPI.
-                </p>
-              </label>
-
-              <details class="add-peak">
-                <summary class="add-peak__toggle">
-                  Stadia API key (optional)
-                </summary>
-                <div class="add-peak__form">
-                  <label class="field">
-                    <input
-                      type="text"
-                      id="opt-stadia-key"
-                      placeholder="leave blank if domain is authorized"
-                      autocomplete="off"
-                      spellcheck="false"
-                    />
-                    <p class="field__hint">
-                      Only needed if this host's domain isn't registered
-                      with Stadia Maps.
-                    </p>
-                  </label>
-                </div>
-              </details>
-
-              <label class="field">
-                <span class="field__label">
-                  Saturation
-                  <span class="field__value" id="sat-readout">0%</span>
-                </span>
-                <input type="range" id="opt-sat" min="0" max="100" value="0" />
-              </label>
-              <label class="field">
-                <span class="field__label">
-                  Contrast
-                  <span class="field__value" id="con-readout">115%</span>
-                </span>
-                <input
-                  type="range"
-                  id="opt-con"
-                  min="50"
-                  max="220"
-                  value="115"
-                />
-              </label>
-              <label class="field">
-                <span class="field__label">
-                  Brightness
-                  <span class="field__value" id="bri-readout">105%</span>
-                </span>
-                <input
-                  type="range"
-                  id="opt-bri"
-                  min="50"
-                  max="160"
-                  value="105"
-                />
-              </label>
-            </div>
-          </details>
-
-          <details class="panel__section">
-            <summary class="panel__summary">
-              <span>04</span> Poster
-            </summary>
-            <div class="panel__body">
-              <label class="field">
-                <span class="field__label">Title</span>
-                <input type="text" id="poster-title" value="High Peaks" />
-              </label>
-              <label class="field">
-                <span class="field__label">Subtitle</span>
-                <input
-                  type="text"
-                  id="poster-subtitle"
-                  value="A Topographic Survey"
-                />
-              </label>
-              <label class="field">
-                <span class="field__label">Aspect</span>
-                <select id="aspect">
-                  <option value="2:3">2:3 portrait (12×18)</option>
-                  <option value="3:4" selected>3:4 portrait (18×24)</option>
-                  <option value="4:5">4:5 portrait (16×20)</option>
-                  <option value="1:1">1:1 square</option>
-                  <option value="4:3">4:3 landscape</option>
-                  <option value="3:2">3:2 landscape</option>
-                </select>
-              </label>
-              <label class="check">
-                <input type="checkbox" id="opt-border" checked />
-                <span>Inner border frame</span>
-              </label>
-              <label class="check">
-                <input type="checkbox" id="opt-attribution" checked />
-                <span>Show map attribution</span>
-              </label>
-            </div>
-          </details>
-
-          <details class="panel__section">
-            <summary class="panel__summary">
-              <span>05</span> Visible Peaks
-              <span class="badge" id="badge-peaks">0</span>
-            </summary>
-            <div class="panel__body panel__body--list">
-              <ul class="peaklist" id="peaklist"></ul>
-            </div>
-            <div class="panel__body">
-              <details class="add-peak">
-                <summary class="add-peak__toggle">
-                  + Add a peak by coordinates
-                </summary>
-                <form id="add-peak-form" class="add-peak__form">
-                  <label class="field">
-                    <span class="field__label">Name</span>
-                    <input
-                      type="text"
-                      id="ap-name"
-                      required
-                      maxlength="80"
-                      placeholder="e.g. Cliff"
-                    />
-                  </label>
-                  <label class="field">
-                    <span class="field__label">
-                      Elevation
-                      <span class="field__value" id="ap-unit">ft</span>
-                    </span>
-                    <input
-                      type="number"
-                      id="ap-ele"
-                      step="1"
-                      placeholder="optional"
-                    />
-                  </label>
-                  <div class="add-peak__coords">
-                    <label class="field">
-                      <span class="field__label">Lat</span>
-                      <input
-                        type="number"
-                        id="ap-lat"
-                        step="0.000001"
-                        required
-                        placeholder="44.1126"
-                      />
-                    </label>
-                    <label class="field">
-                      <span class="field__label">Lng</span>
-                      <input
-                        type="number"
-                        id="ap-lng"
-                        step="0.000001"
-                        required
-                        placeholder="-73.9237"
-                      />
-                    </label>
-                  </div>
-                  <p
-                    class="add-peak__error"
-                    id="ap-error"
-                    style="display: none"
-                  ></p>
-                  <div class="add-peak__actions">
-                    <button type="button" class="btn" id="ap-center">
-                      Use map center
-                    </button>
-                    <button type="submit" class="btn btn--solid">
-                      Add peak
-                    </button>
-                  </div>
-                  <p class="field__hint">
-                    Drop a pin in Google Maps and copy the lat/lng from
-                    the URL. Saved locally; persists across reloads.
-                  </p>
-                </form>
-              </details>
-            </div>
-            <div
-              class="panel__sub"
-              id="excluded-wrap"
-              style="display: none"
-            >
-              <details class="panel__sub__details">
-                <summary class="panel__sub__summary">
-                  Excluded
-                  <span class="badge" id="badge-excluded">0</span>
-                </summary>
-                <ul
-                  class="peaklist peaklist--excluded"
-                  id="excluded-peaklist"
-                ></ul>
-              </details>
-            </div>
-          </details>
-        </aside>
-
-        <!-- Poster stage -------------------------------------------- -->
-        <main class="stage">
-          <div class="poster" id="poster" data-aspect="3:4">
-            <div class="poster__frame">
-              <header class="poster__head">
-                <h1 class="poster__title" id="title-display">High Peaks</h1>
-                <p class="poster__sub" id="subtitle-display">
-                  A Topographic Survey
-                </p>
-              </header>
-              <div class="poster__map" id="map" aria-label="Map preview"></div>
-              <footer class="poster__foot">
-                <span class="poster__coord" id="foot-coord">—</span>
-                <span class="poster__sep" aria-hidden="true">·</span>
-                <span class="poster__scale" id="foot-scale">—</span>
-                <span class="poster__sep" aria-hidden="true">·</span>
-                <span class="poster__unit" id="foot-unit">elevations in feet</span>
-              </footer>
-            </div>
-          </div>
-        </main>
-      </div>
-    </div>
-
-    <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
-    <script src="https://unpkg.com/maplibre-contour@0.1.0/dist/index.min.js"></script>
-    <script src="js/app.js"></script>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
